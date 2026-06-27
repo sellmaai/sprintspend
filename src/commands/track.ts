@@ -41,6 +41,9 @@ function readClassification(sessionId: string): ClassificationFile | null {
 
 export async function track(): Promise<void> {
   try {
+    // Skip if this is a classification subprocess
+    if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
+
     // Read hook input from stdin
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {
@@ -91,19 +94,15 @@ export async function track(): Promise<void> {
     await addOrUpdateEntry(entry);
 
     // Sync to Linear if we have an issue and meaningful cost delta
-    if (issueId && config.linearCustomFieldId) {
+    if (issueId) {
       const delta = await getUnsyncedDelta(issueId);
       if (delta >= MIN_COST_DELTA_TO_SYNC) {
         try {
           const client = createLinearClient(config.linearAccessToken);
-          await updateIssueAiSpend(
-            client,
-            issueId,
-            config.linearCustomFieldId,
-            delta
-          );
-          const totalCost = (existingEntry?.totalCost ?? 0) + delta;
-          await markSynced(issueId, totalCost);
+          // Post/update a comment with the cumulative cost
+          const totalIssueCost = (existingEntry?.totalCost ?? 0) + delta;
+          await updateIssueAiSpend(client, issueId, totalIssueCost);
+          await markSynced(issueId, totalIssueCost);
         } catch (err) {
           logError("Linear sync failed", err);
         }

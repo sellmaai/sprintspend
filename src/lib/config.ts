@@ -29,7 +29,6 @@ export function saveConfig(config: Config): void {
 export function updateConfig(partial: Partial<Config>): Config {
   const existing = loadConfig() ?? {
     linearAccessToken: "",
-    linearCustomFieldId: "",
     linearUserId: "",
   };
   const updated = { ...existing, ...partial };

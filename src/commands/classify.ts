@@ -8,7 +8,7 @@ import { writeFileSync, mkdirSync, existsSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HookInput } from "../types.js";
 
-const CLASSIFY_AFTER_TURNS = 3;
+const CLASSIFY_AFTER_TURNS = 2;
 
 function classifyDir(): string {
   const dir = join(getConfigDir(), "classifications");
@@ -25,6 +25,10 @@ function logError(message: string, error?: unknown): void {
 
 export async function classify(): Promise<void> {
   try {
+    // Guard against recursive hooks: if our own classify spawned this
+    // claude session, don't classify again
+    if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
+
     // Read hook input from stdin
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {
@@ -76,6 +80,7 @@ Use "high" if the match is clear, "low" if it's a guess.
 If no issue matches: {"identifier": null, "confidence": "none"}`;
 
     // Use the claude CLI itself — no separate API key needed
+    // Set env var to prevent recursive hook invocation
     const result = execSync(
       `claude -p --model haiku --output-format json`,
       {
@@ -83,6 +88,7 @@ If no issue matches: {"identifier": null, "confidence": "none"}`;
         encoding: "utf-8",
         timeout: 30_000,
         stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, SPRINTSPENDS_CLASSIFYING: "1" },
       }
     );
 

@@ -1,10 +1,10 @@
 import { loadConfig } from "../lib/config.js";
-import { getLedger, getUnsyncedDelta, markSynced } from "../lib/ledger.js";
+import { getLedger, markSynced } from "../lib/ledger.js";
 import { createLinearClient, updateIssueAiSpend } from "../lib/linear.js";
 
 export async function sync(): Promise<void> {
   const config = loadConfig();
-  if (!config?.linearAccessToken || !config?.linearCustomFieldId) {
+  if (!config?.linearAccessToken) {
     console.error("Not configured. Run: sprintspends configure");
     process.exit(1);
   }
@@ -18,12 +18,7 @@ export async function sync(): Promise<void> {
     if (delta < 0.001) continue;
 
     try {
-      await updateIssueAiSpend(
-        client,
-        issueId,
-        config.linearCustomFieldId,
-        delta
-      );
+      await updateIssueAiSpend(client, issueId, totals.totalCost);
       await markSynced(issueId, totals.totalCost);
       synced++;
 

@@ -49,7 +49,6 @@ export interface ModelPricing {
 // Local config stored at ~/.sprintspends/config.json
 export interface Config {
   linearAccessToken: string;
-  linearCustomFieldId: string;
   linearUserId: string;
 }
 

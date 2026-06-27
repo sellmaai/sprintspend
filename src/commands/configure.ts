@@ -1,10 +1,6 @@
 import { findRepoConfig, updateConfig, loadConfig } from "../lib/config.js";
 import { performOAuthFlow } from "../lib/oauth-server.js";
-import {
-  createLinearClient,
-  getCurrentUser,
-  findOrCreateCustomField,
-} from "../lib/linear.js";
+import { createLinearClient, getCurrentUser } from "../lib/linear.js";
 import { installHook } from "../lib/hook-installer.js";
 import { createInterface } from "node:readline";
 
@@ -58,21 +54,15 @@ export async function configure(cwd: string): Promise<void> {
   const user = await getCurrentUser(client);
   console.log(`\nLogged in as: ${user.name}`);
 
-  // Step 3: Find or create custom field
-  console.log("\nStep 2: Setting up 'AI Spend ($)' custom field in Linear...");
-  const customFieldId = await findOrCreateCustomField(client);
-  console.log(`Custom field ready (${customFieldId})`);
-
-  // Step 4: Save config
+  // Step 3: Save config
   updateConfig({
     linearAccessToken: accessToken,
-    linearCustomFieldId: customFieldId,
     linearUserId: user.id,
   });
   console.log("\nConfig saved to ~/.sprintspends/config.json");
 
-  // Step 5: Install Claude Code hook
-  console.log("\nStep 3: Installing Claude Code hook...");
+  // Step 4: Install Claude Code hook
+  console.log("\nStep 2: Installing Claude Code hook...");
   const hookResult = installHook();
   if (hookResult.alreadyInstalled) {
     console.log("Hook already installed in ~/.claude/settings.json");
@@ -83,5 +73,5 @@ export async function configure(cwd: string): Promise<void> {
   console.log("\nSetup complete! SprintSpends will now:");
   console.log("  - Track AI costs on every Claude Code turn");
   console.log("  - Classify conversations to Linear issues (using Claude Code's own LLM)");
-  console.log("  - Update the 'AI Spend ($)' field on matched issues");
+  console.log("  - Post AI spend as a comment on matched Linear issues");
 }

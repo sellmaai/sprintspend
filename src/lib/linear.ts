@@ -1,5 +1,7 @@
 import { LinearClient } from "@linear/sdk";
 
+const COMMENT_TAG = "<!-- sprintspends -->";
+
 export function createLinearClient(accessToken: string): LinearClient {
   return new LinearClient({ accessToken });
 }
@@ -35,95 +37,36 @@ export async function getMyActiveIssues(
   }));
 }
 
-// Find or create the "AI Spend ($)" custom field
-export async function findOrCreateCustomField(
-  client: LinearClient
-): Promise<string> {
-  // Search for existing custom field
-  const response = await client.client.rawRequest(
-    `query { customFields { nodes { id name } } }`
-  );
-  const fields = (response.data as any).customFields.nodes as Array<{
-    id: string;
-    name: string;
-  }>;
-
-  const existing = fields.find((f) => f.name === "AI Spend ($)");
-  if (existing) return existing.id;
-
-  // Create the custom field
-  const createResponse = await client.client.rawRequest(
-    `mutation($input: CustomFieldCreateInput!) {
-      customFieldCreate(input: $input) {
-        customField { id name }
-        success
-      }
-    }`,
-    {
-      input: {
-        name: "AI Spend ($)",
-        type: "number",
-        description: "Cumulative AI tool cost tracked by SprintSpends",
-      },
-    }
-  );
-
-  const created = (createResponse.data as any).customFieldCreate.customField;
-  return created.id;
-}
-
-// Read current AI Spend value from an issue
-export async function getIssueAiSpend(
+// Find existing SprintSpends comment on an issue
+async function findSprintSpendsComment(
   client: LinearClient,
-  issueId: string,
-  customFieldId: string
-): Promise<number> {
-  const response = await client.client.rawRequest(
-    `query($id: String!) {
-      issue(id: $id) {
-        customFields {
-          edges {
-            value
-            customField { id }
-          }
-        }
-      }
-    }`,
-    { id: issueId }
-  );
+  issueId: string
+): Promise<{ id: string; body: string } | null> {
+  const issue = await client.issue(issueId);
+  const comments = await issue.comments({ first: 100 });
 
-  const edges = (response.data as any)?.issue?.customFields?.edges as
-    | Array<{ value: any; customField: { id: string } }>
-    | undefined;
-
-  if (!edges) return 0;
-
-  const field = edges.find((e) => e.customField.id === customFieldId);
-  return typeof field?.value === "number" ? field.value : 0;
+  for (const comment of comments.nodes) {
+    if (comment.body.includes(COMMENT_TAG)) {
+      return { id: comment.id, body: comment.body };
+    }
+  }
+  return null;
 }
 
-// Update the AI Spend custom field on an issue (additive)
+// Update or create AI Spend comment on an issue
 export async function updateIssueAiSpend(
   client: LinearClient,
   issueId: string,
-  customFieldId: string,
-  costDelta: number
+  totalCost: number
 ): Promise<void> {
-  const currentCost = await getIssueAiSpend(client, issueId, customFieldId);
-  const newCost = Math.round((currentCost + costDelta) * 100) / 100;
+  const costStr = totalCost.toFixed(2);
+  const body = `${COMMENT_TAG}\n**AI Spend: $${costStr}**\n\n_Tracked by SprintSpends_`;
 
-  await client.client.rawRequest(
-    `mutation($issueId: String!, $value: CustomFieldValue!) {
-      issueCustomFieldValueUpdate(id: $issueId, value: $value) {
-        success
-      }
-    }`,
-    {
-      issueId,
-      value: {
-        customFieldId,
-        value: newCost,
-      },
-    }
-  );
+  const existing = await findSprintSpendsComment(client, issueId);
+
+  if (existing) {
+    await client.updateComment(existing.id, { body });
+  } else {
+    await client.createComment({ issueId, body });
+  }
 }
