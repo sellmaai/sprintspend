@@ -50,6 +50,7 @@ export interface ModelPricing {
 export interface Config {
   linearAccessToken: string;
   linearUserId: string;
+  logLevel?: "debug" | "verbose" | "info" | "error";
 }
 
 // .sprintspends.json in the repo root (committed)

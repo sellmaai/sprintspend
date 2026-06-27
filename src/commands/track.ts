@@ -10,20 +10,14 @@ import {
   getMyProjects,
   updateProjectAiSpend,
 } from "../lib/linear.js";
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { log, initLogLevel } from "../lib/logger.js";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import type { HookInput, LedgerEntry } from "../types.js";
 
 const MIN_COST_DELTA_TO_SYNC = 0.001;
 const CLASSIFY_AFTER_TURNS = 2;
-
-function logError(message: string, error?: unknown): void {
-  const logPath = join(getConfigDir(), "error.log");
-  const timestamp = new Date().toISOString();
-  const errStr = error instanceof Error ? error.message : String(error ?? "");
-  appendFileSync(logPath, `[${timestamp}] ${message} ${errStr}\n`, "utf-8");
-}
 
 function classifyDir(): string {
   const dir = join(getConfigDir(), "classifications");
@@ -55,7 +49,11 @@ async function classifySession(
   try {
     const client = createLinearClient(linearAccessToken);
     const projects = await getMyProjects(client);
-    if (projects.length === 0) return null;
+    log.debug(`Fetched ${projects.length} projects: ${projects.map(p => p.name).join(", ")}`);
+    if (projects.length === 0) {
+      log.verbose("No projects found in Linear, skipping classification");
+      return null;
+    }
 
     const projectList = projects
       .map((p) => {
@@ -80,6 +78,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 Use "high" if the match is clear, "low" if it's a guess.
 If no project matches: {"project": null, "confidence": "none"}`;
 
+    log.debug("Calling claude -p for classification");
     const result = execSync(
       `claude -p --model haiku --output-format json`,
       {
@@ -91,6 +90,8 @@ If no project matches: {"project": null, "confidence": "none"}`;
       }
     );
 
+    log.debug(`claude -p response: ${result.slice(0, 300)}`);
+
     let parsed: { project: string | null; confidence: string };
     try {
       const jsonResponse = JSON.parse(result.trim());
@@ -99,16 +100,27 @@ If no project matches: {"project": null, "confidence": "none"}`;
       parsed = match ? JSON.parse(match[0]) : JSON.parse(typeof text === "string" ? text : JSON.stringify(text));
     } catch {
       const match = result.match(/\{[^}]+\}/);
-      if (!match) return null;
+      if (!match) {
+        log.error("Could not parse classification response from claude -p");
+        return null;
+      }
       parsed = JSON.parse(match[0]);
     }
 
-    if (!parsed.project || parsed.confidence === "none") return null;
+    log.debug(`Classification result: project=${parsed.project} confidence=${parsed.confidence}`);
+
+    if (!parsed.project || parsed.confidence === "none") {
+      log.verbose(`Session ${sessionId.slice(0, 8)} unclassified (no matching project)`);
+      return null;
+    }
 
     const matchedProject = projects.find(
       (p) => p.name.toLowerCase() === parsed.project!.toLowerCase()
     );
-    if (!matchedProject) return null;
+    if (!matchedProject) {
+      log.verbose(`Classification "${parsed.project}" did not match any project name`);
+      return null;
+    }
 
     const classification: ClassificationFile = {
       projectId: matchedProject.id,
@@ -119,9 +131,10 @@ If no project matches: {"project": null, "confidence": "none"}`;
     const outPath = join(classifyDir(), `${sessionId}.json`);
     writeFileSync(outPath, JSON.stringify(classification), "utf-8");
 
+    log.info(`Classified session ${sessionId.slice(0, 8)} → ${matchedProject.name} (${parsed.confidence})`);
     return classification;
   } catch (err) {
-    logError("Classification failed", err);
+    log.error("Classification failed", err);
     return null;
   }
 }
@@ -129,6 +142,8 @@ If no project matches: {"project": null, "confidence": "none"}`;
 export async function track(): Promise<void> {
   try {
     if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
+
+    initLogLevel();
 
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {
@@ -140,9 +155,13 @@ export async function track(): Promise<void> {
     if (!session_id || !transcript_path) return;
 
     const config = loadConfig();
-    if (!config?.linearAccessToken) return;
+    if (!config?.linearAccessToken) {
+      log.debug("No linearAccessToken in config, skipping");
+      return;
+    }
 
     const usage = parseTranscript(transcript_path);
+    log.debug(`Session ${session_id.slice(0, 8)}: turns=${usage.turnCount} cost=$${usage.totalCost.toFixed(4)} excerpt=${usage.conversationExcerpt.length}chars`);
     if (usage.totalCost === 0) return;
 
     const existingEntry = await getEntryBySessionId(session_id);
@@ -155,7 +174,9 @@ export async function track(): Promise<void> {
       if (cached) {
         projectId = cached.projectId;
         projectName = cached.projectName;
+        log.debug(`Using cached classification: ${cached.projectName}`);
       } else if (usage.turnCount >= CLASSIFY_AFTER_TURNS) {
+        log.verbose(`Classifying session ${session_id.slice(0, 8)}...`);
         const result = await classifySession(
           session_id,
           usage.conversationExcerpt,
@@ -165,6 +186,8 @@ export async function track(): Promise<void> {
           projectId = result.projectId;
           projectName = result.projectName;
         }
+      } else {
+        log.debug(`Skipping classification: turn ${usage.turnCount} < ${CLASSIFY_AFTER_TURNS}`);
       }
     }
 
@@ -182,6 +205,7 @@ export async function track(): Promise<void> {
     };
 
     await addOrUpdateEntry(entry);
+    log.verbose(`Tracked session ${session_id.slice(0, 8)}: $${usage.totalCost.toFixed(2)} → ${projectName ?? "unclassified"}`);
 
     // Sync to Linear under ledger lock to prevent race between parallel sessions
     if (projectId) {
@@ -192,20 +216,21 @@ export async function track(): Promise<void> {
         if (delta < MIN_COST_DELTA_TO_SYNC) return;
 
         try {
+          log.verbose(`Syncing ${projectName}: $${totals.lastSyncedCost.toFixed(2)} → $${totals.totalCost.toFixed(2)} (+$${delta.toFixed(2)})`);
           const client = createLinearClient(config.linearAccessToken);
           await updateProjectAiSpend(client, projectId!, totals.totalCost);
-          // Mark synced inside the lock so no other hook can read stale lastSyncedCost
           totals.lastSyncedCost = totals.totalCost;
           totals.lastSyncedAt = new Date().toISOString();
           for (const e of ledger.entries) {
             if (e.linearProjectId === projectId) e.syncedToLinear = true;
           }
+          log.info(`Synced $${totals.totalCost.toFixed(2)} to ${projectName}`);
         } catch (err) {
-          logError("Linear sync failed", err);
+          log.error("Linear sync failed", err);
         }
       });
     }
   } catch (err) {
-    logError("Track command failed", err);
+    log.error("Track command failed", err);
   }
 }
