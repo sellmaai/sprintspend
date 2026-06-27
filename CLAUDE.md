@@ -2,16 +2,6 @@
 
 AI cost tracking for Linear via Claude Code hooks.
 
-## Slash Commands
-
-### /configure_linear
-
-Run `sprintspends configure` to set up SprintSpends. This will:
-1. Authorize with Linear via OAuth (opens browser)
-2. Ask for the team's shared Anthropic API key
-3. Install the Claude Code Stop hook
-4. Create the "AI Spend ($)" custom field in Linear
-
 ## Development
 
 ```bash
@@ -23,8 +13,8 @@ npm test             # Run tests
 
 ## How It Works
 
-1. A Claude Code `Stop` hook fires after each assistant turn
-2. `sprintspends track` parses the session transcript for token usage
-3. After 3 turns, it classifies the conversation to a Linear issue using Claude Haiku
-4. Cost is calculated and stored in a local ledger (`~/.sprintspends/ledger.json`)
-5. The Linear issue's "AI Spend ($)" custom field is updated additively
+1. A Claude Code `Stop` hook fires after each assistant turn (async, non-blocking)
+2. `sprintspends track` parses the session transcript for token usage and calculates cost
+3. After 2 turns, it classifies the conversation to a Linear project using `claude -p --model haiku`
+4. Cost is stored in a local ledger (`~/.sprintspends/ledger.json`)
+5. A project update is posted to Linear with per-developer cost breakdown
