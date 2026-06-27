@@ -47,7 +47,9 @@ cd ~/.sprintspends/app && npm install && npm run build && npm link
 
 #### Configure
 
-Run this from any repo that has `.sprintspends.json`:
+**Option A** — From Claude Code, type `/configure_linear` and Claude will guide you through setup.
+
+**Option B** — Run directly from any repo that has `.sprintspends.json`:
 
 ```bash
 sprintspends configure
@@ -106,6 +108,15 @@ Each dev's sync reads the existing update, preserves other devs' rows, and updat
 | `sprintspends status` | Show local cost summary by project |
 | `sprintspends sync` | Force sync all unsynced costs to Linear |
 | `sprintspends track` | Called by the hook — not meant to be run manually |
+
+## Claude Code Slash Commands
+
+These work inside Claude Code when the repo has a `CLAUDE.md` with SprintSpends instructions:
+
+| Command | Description |
+|---------|-------------|
+| `/configure_linear` | Set up SprintSpends (install + OAuth + hook) |
+| `/sprintspends_status` | Show local cost summary |
 
 ## Local Files
 
