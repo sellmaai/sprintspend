@@ -3,8 +3,7 @@ import { parseTranscript } from "../lib/transcript.js";
 import {
   addOrUpdateEntry,
   getEntryBySessionId,
-  getLedger,
-  markSynced,
+  withLedger,
 } from "../lib/ledger.js";
 import {
   createLinearClient,
@@ -184,19 +183,27 @@ export async function track(): Promise<void> {
 
     await addOrUpdateEntry(entry);
 
+    // Sync to Linear under ledger lock to prevent race between parallel sessions
     if (projectId) {
-      const ledger = await getLedger();
-      const projectTotal = ledger.projectTotals[projectId]?.totalCost ?? 0;
-      const delta = projectTotal - (ledger.projectTotals[projectId]?.lastSyncedCost ?? 0);
-      if (delta >= MIN_COST_DELTA_TO_SYNC) {
+      await withLedger(async (ledger) => {
+        const totals = ledger.projectTotals[projectId!];
+        if (!totals) return;
+        const delta = totals.totalCost - totals.lastSyncedCost;
+        if (delta < MIN_COST_DELTA_TO_SYNC) return;
+
         try {
           const client = createLinearClient(config.linearAccessToken);
-          await updateProjectAiSpend(client, projectId, projectTotal);
-          await markSynced(projectId, projectTotal);
+          await updateProjectAiSpend(client, projectId!, totals.totalCost);
+          // Mark synced inside the lock so no other hook can read stale lastSyncedCost
+          totals.lastSyncedCost = totals.totalCost;
+          totals.lastSyncedAt = new Date().toISOString();
+          for (const e of ledger.entries) {
+            if (e.linearProjectId === projectId) e.syncedToLinear = true;
+          }
         } catch (err) {
           logError("Linear sync failed", err);
         }
-      }
+      });
     }
   } catch (err) {
     logError("Track command failed", err);

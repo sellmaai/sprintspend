@@ -5,7 +5,7 @@ import { getConfigDir } from "./config.js";
 import type { Ledger, LedgerEntry } from "../types.js";
 
 const LEDGER_PATH = join(getConfigDir(), "ledger.json");
-const LOCK_OPTIONS = { retries: { retries: 5, minTimeout: 100, maxTimeout: 1000 } };
+const LOCK_OPTIONS = { retries: { retries: 10, minTimeout: 200, maxTimeout: 5000 }, stale: 30000 };
 
 function emptyLedger(): Ledger {
   return { entries: [], projectTotals: {} };
@@ -37,13 +37,13 @@ function ensureLedgerFile(): void {
   }
 }
 
-export async function withLedger<T>(fn: (ledger: Ledger) => T): Promise<T> {
+export async function withLedger<T>(fn: (ledger: Ledger) => T | Promise<T>): Promise<T> {
   ensureLedgerFile();
   let release: (() => Promise<void>) | undefined;
   try {
     release = await lockfile.lock(LEDGER_PATH, LOCK_OPTIONS);
     const ledger = readLedger();
-    const result = fn(ledger);
+    const result = await fn(ledger);
     writeLedger(ledger);
     return result;
   } finally {
