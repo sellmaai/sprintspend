@@ -14,7 +14,12 @@ function emptyLedger(): Ledger {
 function readLedger(): Ledger {
   if (!existsSync(LEDGER_PATH)) return emptyLedger();
   try {
-    return JSON.parse(readFileSync(LEDGER_PATH, "utf-8"));
+    const raw = JSON.parse(readFileSync(LEDGER_PATH, "utf-8"));
+    // Migrate from old format: issueTotals → projectTotals
+    return {
+      entries: raw.entries ?? [],
+      projectTotals: raw.projectTotals ?? raw.issueTotals ?? {},
+    };
   } catch {
     return emptyLedger();
   }
