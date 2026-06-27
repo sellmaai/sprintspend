@@ -1,6 +1,6 @@
 import { loadConfig } from "../lib/config.js";
 import { getLedger, markSynced } from "../lib/ledger.js";
-import { createLinearClient, updateIssueAiSpend } from "../lib/linear.js";
+import { createLinearClient, updateProjectAiSpend } from "../lib/linear.js";
 
 export async function sync(): Promise<void> {
   const config = loadConfig();
@@ -13,28 +13,28 @@ export async function sync(): Promise<void> {
   const client = createLinearClient(config.linearAccessToken);
   let synced = 0;
 
-  for (const [issueId, totals] of Object.entries(ledger.issueTotals)) {
+  for (const [projectId, totals] of Object.entries(ledger.projectTotals)) {
     const delta = totals.totalCost - totals.lastSyncedCost;
     if (delta < 0.001) continue;
 
     try {
-      await updateIssueAiSpend(client, issueId, totals.totalCost);
-      await markSynced(issueId, totals.totalCost);
+      await updateProjectAiSpend(client, projectId, totals.totalCost);
+      await markSynced(projectId, totals.totalCost);
       synced++;
 
-      const identifier =
-        ledger.entries.find((e) => e.linearIssueId === issueId)
-          ?.linearIssueIdentifier ?? issueId;
-      console.log(`  ${identifier}: +$${delta.toFixed(2)} synced`);
+      const name =
+        ledger.entries.find((e) => e.linearProjectId === projectId)
+          ?.linearProjectName ?? projectId;
+      console.log(`  ${name}: +$${delta.toFixed(2)} synced`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`  Failed to sync ${issueId}: ${msg}`);
+      console.error(`  Failed to sync ${projectId}: ${msg}`);
     }
   }
 
   if (synced === 0) {
     console.log("Everything is up to date.");
   } else {
-    console.log(`\nSynced ${synced} issue(s) to Linear.`);
+    console.log(`\nSynced ${synced} project(s) to Linear.`);
   }
 }

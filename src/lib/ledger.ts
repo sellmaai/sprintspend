@@ -8,7 +8,7 @@ const LEDGER_PATH = join(getConfigDir(), "ledger.json");
 const LOCK_OPTIONS = { retries: { retries: 5, minTimeout: 100, maxTimeout: 1000 } };
 
 function emptyLedger(): Ledger {
-  return { entries: [], issueTotals: {} };
+  return { entries: [], projectTotals: {} };
 }
 
 function readLedger(): Ledger {
@@ -26,7 +26,6 @@ function writeLedger(ledger: Ledger): void {
   writeFileSync(LEDGER_PATH, JSON.stringify(ledger, null, 2), "utf-8");
 }
 
-// Ensure the ledger file exists for locking
 function ensureLedgerFile(): void {
   if (!existsSync(LEDGER_PATH)) {
     writeLedger(emptyLedger());
@@ -55,49 +54,46 @@ export async function addOrUpdateEntry(entry: LedgerEntry): Promise<void> {
 
     if (existing >= 0) {
       const prev = ledger.entries[existing];
-      // Update issue totals: subtract old cost, add new cost
-      if (prev.linearIssueId && ledger.issueTotals[prev.linearIssueId]) {
-        ledger.issueTotals[prev.linearIssueId].totalCost -= prev.totalCost;
+      if (prev.linearProjectId && ledger.projectTotals[prev.linearProjectId]) {
+        ledger.projectTotals[prev.linearProjectId].totalCost -= prev.totalCost;
       }
       ledger.entries[existing] = entry;
     } else {
       ledger.entries.push(entry);
     }
 
-    // Update issue totals
-    if (entry.linearIssueId) {
-      if (!ledger.issueTotals[entry.linearIssueId]) {
-        ledger.issueTotals[entry.linearIssueId] = {
+    if (entry.linearProjectId) {
+      if (!ledger.projectTotals[entry.linearProjectId]) {
+        ledger.projectTotals[entry.linearProjectId] = {
           totalCost: 0,
           lastSyncedCost: 0,
           lastSyncedAt: null,
         };
       }
-      ledger.issueTotals[entry.linearIssueId].totalCost += entry.totalCost;
+      ledger.projectTotals[entry.linearProjectId].totalCost += entry.totalCost;
     }
   });
 }
 
-export async function getUnsyncedDelta(issueId: string): Promise<number> {
+export async function getUnsyncedDelta(projectId: string): Promise<number> {
   return withLedger((ledger) => {
-    const totals = ledger.issueTotals[issueId];
+    const totals = ledger.projectTotals[projectId];
     if (!totals) return 0;
     return totals.totalCost - totals.lastSyncedCost;
   });
 }
 
 export async function markSynced(
-  issueId: string,
+  projectId: string,
   syncedCost: number
 ): Promise<void> {
   await withLedger((ledger) => {
-    if (!ledger.issueTotals[issueId]) return;
-    ledger.issueTotals[issueId].lastSyncedCost = syncedCost;
-    ledger.issueTotals[issueId].lastSyncedAt = new Date().toISOString();
+    if (!ledger.projectTotals[projectId]) return;
+    ledger.projectTotals[projectId].lastSyncedCost = syncedCost;
+    ledger.projectTotals[projectId].lastSyncedAt = new Date().toISOString();
 
-    // Mark individual entries as synced
     for (const entry of ledger.entries) {
-      if (entry.linearIssueId === issueId) {
+      if (entry.linearProjectId === projectId) {
         entry.syncedToLinear = true;
       }
     }

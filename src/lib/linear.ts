@@ -1,7 +1,5 @@
 import { LinearClient } from "@linear/sdk";
 
-const COMMENT_TAG = "<!-- sprintspends -->";
-
 export function createLinearClient(accessToken: string): LinearClient {
   return new LinearClient({ accessToken });
 }
@@ -13,60 +11,46 @@ export async function getCurrentUser(
   return { id: me.id, name: me.name };
 }
 
-// Fetch active/in-progress issues assigned to the current user
-export async function getMyActiveIssues(
+// Fetch active projects the user has access to
+export async function getMyProjects(
   client: LinearClient
 ): Promise<
-  Array<{ id: string; identifier: string; title: string; description?: string }>
+  Array<{ id: string; name: string; description?: string }>
 > {
-  const me = await client.viewer;
-  const issues = await me.assignedIssues({
+  const projects = await client.projects({
     filter: {
-      state: {
-        type: { in: ["started", "unstarted"] },
-      },
+      state: { in: ["planned", "started"] },
     },
     first: 50,
   });
 
-  return issues.nodes.map((issue) => ({
-    id: issue.id,
-    identifier: issue.identifier,
-    title: issue.title,
-    description: issue.description ?? undefined,
+  return projects.nodes.map((project) => ({
+    id: project.id,
+    name: project.name,
+    description: project.description ?? undefined,
   }));
 }
 
-// Find existing SprintSpends comment on an issue
-async function findSprintSpendsComment(
+// Post or update a project update with the AI spend
+export async function updateProjectAiSpend(
   client: LinearClient,
-  issueId: string
-): Promise<{ id: string; body: string } | null> {
-  const issue = await client.issue(issueId);
-  const comments = await issue.comments({ first: 100 });
-
-  for (const comment of comments.nodes) {
-    if (comment.body.includes(COMMENT_TAG)) {
-      return { id: comment.id, body: comment.body };
-    }
-  }
-  return null;
-}
-
-// Update or create AI Spend comment on an issue
-export async function updateIssueAiSpend(
-  client: LinearClient,
-  issueId: string,
+  projectId: string,
   totalCost: number
 ): Promise<void> {
   const costStr = totalCost.toFixed(2);
-  const body = `${COMMENT_TAG}\n**AI Spend: $${costStr}**\n\n_Tracked by SprintSpends_`;
+  const body = `**AI Spend: $${costStr}**\n\n_Tracked by SprintSpends_`;
 
-  const existing = await findSprintSpendsComment(client, issueId);
+  // Check for existing SprintSpends project update
+  const project = await client.project(projectId);
+  const updates = await project.projectUpdates({ first: 50 });
+
+  const existing = updates.nodes.find((u) =>
+    u.body.includes("Tracked by SprintSpends")
+  );
 
   if (existing) {
-    await client.updateComment(existing.id, { body });
+    await client.updateProjectUpdate(existing.id, { body });
   } else {
-    await client.createComment({ issueId, body });
+    await client.createProjectUpdate({ projectId, body });
   }
 }

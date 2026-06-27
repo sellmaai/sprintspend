@@ -63,6 +63,7 @@ export async function performOAuthFlow(clientId: string): Promise<string> {
   const authorizeUrl = getAuthorizeUrl(clientId, codeChallenge);
 
   return new Promise<string>((resolve, reject) => {
+    let timeout: NodeJS.Timeout;
     const server = createServer(
       async (req: IncomingMessage, res: ServerResponse) => {
         try {
@@ -102,13 +103,15 @@ export async function performOAuthFlow(clientId: string): Promise<string> {
             </body></html>
           `);
 
-          server.close();
-          resolve(accessToken);
+          clearTimeout(timeout);
+          server.close(() => resolve(accessToken));
+          server.closeAllConnections();
         } catch (err) {
           res.writeHead(500);
           res.end("Internal error");
-          server.close();
-          reject(err);
+          clearTimeout(timeout);
+          server.close(() => reject(err));
+          server.closeAllConnections();
         }
       }
     );
@@ -130,9 +133,9 @@ export async function performOAuthFlow(clientId: string): Promise<string> {
     });
 
     // Timeout after 5 minutes
-    setTimeout(() => {
-      server.close();
-      reject(new Error("OAuth flow timed out (5 minutes)"));
+    timeout = setTimeout(() => {
+      server.close(() => reject(new Error("OAuth flow timed out (5 minutes)")));
+      server.closeAllConnections();
     }, 5 * 60 * 1000);
   });
 }

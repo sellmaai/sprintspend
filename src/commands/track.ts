@@ -8,13 +8,13 @@ import {
 } from "../lib/ledger.js";
 import {
   createLinearClient,
-  updateIssueAiSpend,
+  updateProjectAiSpend,
 } from "../lib/linear.js";
 import { readFileSync, appendFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { HookInput, LedgerEntry } from "../types.js";
 
-const MIN_COST_DELTA_TO_SYNC = 0.001; // $0.001
+const MIN_COST_DELTA_TO_SYNC = 0.001;
 
 function logError(message: string, error?: unknown): void {
   const logPath = join(getConfigDir(), "error.log");
@@ -24,8 +24,8 @@ function logError(message: string, error?: unknown): void {
 }
 
 interface ClassificationFile {
-  issueId: string;
-  issueIdentifier: string;
+  projectId: string;
+  projectName: string;
   confidence: string;
 }
 
@@ -41,10 +41,8 @@ function readClassification(sessionId: string): ClassificationFile | null {
 
 export async function track(): Promise<void> {
   try {
-    // Skip if this is a classification subprocess
     if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
 
-    // Read hook input from stdin
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {
       chunks.push(chunk as Buffer);
@@ -54,36 +52,32 @@ export async function track(): Promise<void> {
     const { session_id, transcript_path, cwd } = input;
     if (!session_id || !transcript_path) return;
 
-    // Load config — only need Linear token now
     const config = loadConfig();
     if (!config?.linearAccessToken) return;
 
-    // Parse transcript
     const usage = parseTranscript(transcript_path);
     if (usage.totalCost === 0) return;
 
-    // Check existing entry for this session
     const existingEntry = await getEntryBySessionId(session_id);
 
     // Read classification (written by the classify command)
-    let issueId = existingEntry?.linearIssueId ?? null;
-    let issueIdentifier = existingEntry?.linearIssueIdentifier ?? null;
+    let projectId = existingEntry?.linearProjectId ?? null;
+    let projectName = existingEntry?.linearProjectName ?? null;
 
-    if (!issueId) {
+    if (!projectId) {
       const classification = readClassification(session_id);
       if (classification) {
-        issueId = classification.issueId;
-        issueIdentifier = classification.issueIdentifier;
+        projectId = classification.projectId;
+        projectName = classification.projectName;
       }
     }
 
-    // Build ledger entry
     const entry: LedgerEntry = {
       sessionId: session_id,
       timestamp: new Date().toISOString(),
       cwd,
-      linearIssueId: issueId,
-      linearIssueIdentifier: issueIdentifier,
+      linearProjectId: projectId,
+      linearProjectName: projectName,
       models: usage.models,
       totalCost: usage.totalCost,
       turnCount: usage.turnCount,
@@ -93,16 +87,15 @@ export async function track(): Promise<void> {
 
     await addOrUpdateEntry(entry);
 
-    // Sync to Linear if we have an issue and meaningful cost delta
-    if (issueId) {
-      const delta = await getUnsyncedDelta(issueId);
+    // Sync to Linear as a project update
+    if (projectId) {
+      const delta = await getUnsyncedDelta(projectId);
       if (delta >= MIN_COST_DELTA_TO_SYNC) {
         try {
           const client = createLinearClient(config.linearAccessToken);
-          // Post/update a comment with the cumulative cost
-          const totalIssueCost = (existingEntry?.totalCost ?? 0) + delta;
-          await updateIssueAiSpend(client, issueId, totalIssueCost);
-          await markSynced(issueId, totalIssueCost);
+          const totalProjectCost = (existingEntry?.totalCost ?? 0) + delta;
+          await updateProjectAiSpend(client, projectId, totalProjectCost);
+          await markSynced(projectId, totalProjectCost);
         } catch (err) {
           logError("Linear sync failed", err);
         }

@@ -1,8 +1,7 @@
-import { loadConfig } from "../lib/config.js";
+import { loadConfig, getConfigDir } from "../lib/config.js";
 import { parseTranscript } from "../lib/transcript.js";
-import { createLinearClient, getMyActiveIssues } from "../lib/linear.js";
+import { createLinearClient, getMyProjects } from "../lib/linear.js";
 import { getEntryBySessionId } from "../lib/ledger.js";
-import { getConfigDir } from "../lib/config.js";
 import { execSync } from "node:child_process";
 import { writeFileSync, mkdirSync, existsSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,11 +24,8 @@ function logError(message: string, error?: unknown): void {
 
 export async function classify(): Promise<void> {
   try {
-    // Guard against recursive hooks: if our own classify spawned this
-    // claude session, don't classify again
     if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
 
-    // Read hook input from stdin
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {
       chunks.push(chunk as Buffer);
@@ -39,48 +35,43 @@ export async function classify(): Promise<void> {
     const { session_id, transcript_path } = input;
     if (!session_id || !transcript_path) return;
 
-    // Load config — need Linear token but NOT Anthropic key
     const config = loadConfig();
     if (!config?.linearAccessToken) return;
 
-    // Check if already classified
     const existing = await getEntryBySessionId(session_id);
-    if (existing?.linearIssueId) return; // already classified
+    if (existing?.linearProjectId) return; // already classified
 
-    // Parse transcript to check turn count and get excerpt
     const usage = parseTranscript(transcript_path);
     if (usage.turnCount < CLASSIFY_AFTER_TURNS) return;
 
-    // Fetch active Linear issues
+    // Fetch active Linear projects
     const client = createLinearClient(config.linearAccessToken);
-    const issues = await getMyActiveIssues(client);
-    if (issues.length === 0) return;
+    const projects = await getMyProjects(client);
+    if (projects.length === 0) return;
 
-    const issueList = issues
-      .map((i) => {
-        const desc = i.description ? ` - ${i.description.slice(0, 100)}` : "";
-        return `${i.identifier}: ${i.title}${desc}`;
+    const projectList = projects
+      .map((p) => {
+        const desc = p.description ? ` - ${p.description.slice(0, 100)}` : "";
+        return `${p.name}${desc}`;
       })
       .join("\n");
 
-    const prompt = `You are classifying a developer's Claude Code conversation to determine which Linear issue they are working on.
+    const prompt = `You are classifying a developer's Claude Code conversation to determine which Linear project they are working on.
 
-## Active Linear Issues
-${issueList}
+## Active Linear Projects
+${projectList}
 
 ## Conversation Excerpt
 ${usage.conversationExcerpt}
 
 ## Instructions
-Based on the conversation content, determine which Linear issue the developer is most likely working on.
+Based on the conversation content, determine which Linear project the developer is most likely working on.
 Respond with ONLY a JSON object (no markdown, no explanation):
-{"identifier": "ENG-123", "confidence": "high"}
+{"project": "Project Name", "confidence": "high"}
 
 Use "high" if the match is clear, "low" if it's a guess.
-If no issue matches: {"identifier": null, "confidence": "none"}`;
+If no project matches: {"project": null, "confidence": "none"}`;
 
-    // Use the claude CLI itself — no separate API key needed
-    // Set env var to prevent recursive hook invocation
     const result = execSync(
       `claude -p --model haiku --output-format json`,
       {
@@ -93,34 +84,32 @@ If no issue matches: {"identifier": null, "confidence": "none"}`;
     );
 
     // Parse Claude's response
-    let parsed: { identifier: string | null; confidence: string };
+    let parsed: { project: string | null; confidence: string };
     try {
-      // claude --output-format json wraps response, extract the text
       const jsonResponse = JSON.parse(result.trim());
       const text = jsonResponse.result ?? jsonResponse.content ?? result;
-      // The actual classification JSON might be inside the text
       const match = typeof text === "string" ? text.match(/\{[^}]+\}/) : null;
       parsed = match ? JSON.parse(match[0]) : JSON.parse(typeof text === "string" ? text : JSON.stringify(text));
     } catch {
-      // Try parsing raw output directly
       const match = result.match(/\{[^}]+\}/);
       if (!match) return;
       parsed = JSON.parse(match[0]);
     }
 
-    if (!parsed.identifier || parsed.confidence === "none") return;
+    if (!parsed.project || parsed.confidence === "none") return;
 
-    // Find matching issue to get the ID
-    const matchedIssue = issues.find((i) => i.identifier === parsed.identifier);
-    if (!matchedIssue) return;
+    // Find matching project by name (case-insensitive)
+    const matchedProject = projects.find(
+      (p) => p.name.toLowerCase() === parsed.project!.toLowerCase()
+    );
+    if (!matchedProject) return;
 
-    // Write classification result for the track command to pick up
     const outPath = join(classifyDir(), `${session_id}.json`);
     writeFileSync(
       outPath,
       JSON.stringify({
-        issueId: matchedIssue.id,
-        issueIdentifier: matchedIssue.identifier,
+        projectId: matchedProject.id,
+        projectName: matchedProject.name,
         confidence: parsed.confidence,
         classifiedAt: new Date().toISOString(),
       }),

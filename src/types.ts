@@ -62,8 +62,8 @@ export interface LedgerEntry {
   sessionId: string;
   timestamp: string;
   cwd: string;
-  linearIssueId: string | null; // null = unclassified
-  linearIssueIdentifier: string | null; // e.g. "ENG-123"
+  linearProjectId: string | null;
+  linearProjectName: string | null;
   models: Record<string, ModelUsage>;
   totalCost: number;
   turnCount: number;
@@ -74,7 +74,7 @@ export interface LedgerEntry {
 // The full ledger
 export interface Ledger {
   entries: LedgerEntry[];
-  issueTotals: Record<
+  projectTotals: Record<
     string,
     {
       totalCost: number;
