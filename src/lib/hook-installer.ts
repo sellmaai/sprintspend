@@ -6,7 +6,6 @@ const CLAUDE_DIR = join(homedir(), ".claude");
 const SETTINGS_PATH = join(CLAUDE_DIR, "settings.json");
 
 const TRACK_COMMAND = "sprintspends track";
-const CLASSIFY_COMMAND = "sprintspends classify";
 
 interface HookEntry {
   type: string;
@@ -22,9 +21,7 @@ interface ClaudeSettings {
 }
 
 function isSprintSpendsHook(h: HookEntry): boolean {
-  return (
-    (h.type === "command" && (h.command === TRACK_COMMAND || h.command === CLASSIFY_COMMAND))
-  );
+  return h.type === "command" && h.command === TRACK_COMMAND;
 }
 
 export function installHook(): { alreadyInstalled: boolean } {
@@ -59,15 +56,8 @@ export function installHook(): { alreadyInstalled: boolean } {
     settings.hooks.Stop = [];
   }
 
-  // Command hook: classify the conversation using Claude Code's own LLM,
-  // then track costs and sync to Linear
   settings.hooks.Stop.push({
     hooks: [
-      {
-        type: "command",
-        command: CLASSIFY_COMMAND,
-        async: true,
-      },
       {
         type: "command",
         command: TRACK_COMMAND,
