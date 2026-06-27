@@ -20,8 +20,13 @@ interface ClaudeSettings {
   [key: string]: unknown;
 }
 
+const OLD_CLASSIFY_COMMAND = "sprintspends classify";
+
 function isSprintSpendsHook(h: HookEntry): boolean {
-  return h.type === "command" && h.command === TRACK_COMMAND;
+  return (
+    h.type === "command" &&
+    (h.command === TRACK_COMMAND || h.command === OLD_CLASSIFY_COMMAND)
+  );
 }
 
 export function installHook(): { alreadyInstalled: boolean } {
@@ -42,16 +47,17 @@ export function installHook(): { alreadyInstalled: boolean } {
     settings.hooks = {};
   }
 
-  // Check if already installed
-  const stopHooks = settings.hooks.Stop;
-  if (stopHooks) {
-    const hasSprintSpends = stopHooks.some((entry) =>
-      entry.hooks.some(isSprintSpendsHook)
+  // Remove any old sprintspends hooks (including outdated classify hook)
+  if (settings.hooks.Stop) {
+    settings.hooks.Stop = settings.hooks.Stop.filter(
+      (entry) => !entry.hooks.some(isSprintSpendsHook)
     );
-    if (hasSprintSpends) return { alreadyInstalled: true };
+    if (settings.hooks.Stop.length === 0) {
+      delete settings.hooks.Stop;
+    }
   }
 
-  // Add hooks: classify first (gets issue from Claude Code), then track (calculates cost + syncs)
+  // Install the current single hook
   if (!settings.hooks.Stop) {
     settings.hooks.Stop = [];
   }
