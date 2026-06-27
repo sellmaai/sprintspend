@@ -3,7 +3,7 @@ import { parseTranscript } from "../lib/transcript.js";
 import {
   addOrUpdateEntry,
   getEntryBySessionId,
-  getUnsyncedDelta,
+  getLedger,
   markSynced,
 } from "../lib/ledger.js";
 import {
@@ -185,13 +185,14 @@ export async function track(): Promise<void> {
     await addOrUpdateEntry(entry);
 
     if (projectId) {
-      const delta = await getUnsyncedDelta(projectId);
+      const ledger = await getLedger();
+      const projectTotal = ledger.projectTotals[projectId]?.totalCost ?? 0;
+      const delta = projectTotal - (ledger.projectTotals[projectId]?.lastSyncedCost ?? 0);
       if (delta >= MIN_COST_DELTA_TO_SYNC) {
         try {
           const client = createLinearClient(config.linearAccessToken);
-          const totalProjectCost = (existingEntry?.totalCost ?? 0) + delta;
-          await updateProjectAiSpend(client, projectId, totalProjectCost);
-          await markSynced(projectId, totalProjectCost);
+          await updateProjectAiSpend(client, projectId, projectTotal);
+          await markSynced(projectId, projectTotal);
         } catch (err) {
           logError("Linear sync failed", err);
         }
