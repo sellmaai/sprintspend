@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { configure } from "./commands/configure.js";
+import { classify } from "./commands/classify.js";
 import { track } from "./commands/track.js";
 import { status } from "./commands/status.js";
 import { sync } from "./commands/sync.js";
@@ -13,9 +14,16 @@ program
 
 program
   .command("configure")
-  .description("Set up Linear OAuth, Anthropic API key, and install Claude Code hook")
+  .description("Set up Linear OAuth and install Claude Code hook")
   .action(async () => {
     await configure(process.cwd());
+  });
+
+program
+  .command("classify")
+  .description("Classify a session to a Linear issue (called by hook)")
+  .action(async () => {
+    await classify();
   });
 
 program

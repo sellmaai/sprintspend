@@ -1,4 +1,4 @@
-import { loadConfig } from "../lib/config.js";
+import { loadConfig, getConfigDir } from "../lib/config.js";
 import { parseTranscript } from "../lib/transcript.js";
 import {
   addOrUpdateEntry,
@@ -6,18 +6,14 @@ import {
   getUnsyncedDelta,
   markSynced,
 } from "../lib/ledger.js";
-import { classifyConversation } from "../lib/classifier.js";
 import {
   createLinearClient,
-  getMyActiveIssues,
   updateIssueAiSpend,
 } from "../lib/linear.js";
-import { appendFileSync } from "node:fs";
+import { readFileSync, appendFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { getConfigDir } from "../lib/config.js";
 import type { HookInput, LedgerEntry } from "../types.js";
 
-const CLASSIFY_AFTER_TURNS = 3;
 const MIN_COST_DELTA_TO_SYNC = 0.001; // $0.001
 
 function logError(message: string, error?: unknown): void {
@@ -25,6 +21,22 @@ function logError(message: string, error?: unknown): void {
   const timestamp = new Date().toISOString();
   const errStr = error instanceof Error ? error.message : String(error ?? "");
   appendFileSync(logPath, `[${timestamp}] ${message} ${errStr}\n`, "utf-8");
+}
+
+interface ClassificationFile {
+  issueId: string;
+  issueIdentifier: string;
+  confidence: string;
+}
+
+function readClassification(sessionId: string): ClassificationFile | null {
+  const filePath = join(getConfigDir(), "classifications", `${sessionId}.json`);
+  if (!existsSync(filePath)) return null;
+  try {
+    return JSON.parse(readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
 }
 
 export async function track(): Promise<void> {
@@ -39,9 +51,9 @@ export async function track(): Promise<void> {
     const { session_id, transcript_path, cwd } = input;
     if (!session_id || !transcript_path) return;
 
-    // Load config — if not configured, exit silently
+    // Load config — only need Linear token now
     const config = loadConfig();
-    if (!config?.linearAccessToken || !config?.anthropicApiKey) return;
+    if (!config?.linearAccessToken) return;
 
     // Parse transcript
     const usage = parseTranscript(transcript_path);
@@ -50,31 +62,15 @@ export async function track(): Promise<void> {
     // Check existing entry for this session
     const existingEntry = await getEntryBySessionId(session_id);
 
-    // Determine if we need to classify
+    // Read classification (written by the classify command)
     let issueId = existingEntry?.linearIssueId ?? null;
     let issueIdentifier = existingEntry?.linearIssueIdentifier ?? null;
-    const needsClassification =
-      !issueId &&
-      usage.turnCount >= CLASSIFY_AFTER_TURNS;
 
-    if (needsClassification) {
-      try {
-        const client = createLinearClient(config.linearAccessToken);
-        const issues = await getMyActiveIssues(client);
-
-        if (issues.length > 0) {
-          const result = await classifyConversation(
-            config.anthropicApiKey,
-            usage.conversationExcerpt,
-            issues
-          );
-          if (result.issueId && result.confidence !== "none") {
-            issueId = result.issueId;
-            issueIdentifier = result.issueIdentifier;
-          }
-        }
-      } catch (err) {
-        logError("Classification failed", err);
+    if (!issueId) {
+      const classification = readClassification(session_id);
+      if (classification) {
+        issueId = classification.issueId;
+        issueIdentifier = classification.issueIdentifier;
       }
     }
 
@@ -106,8 +102,7 @@ export async function track(): Promise<void> {
             config.linearCustomFieldId,
             delta
           );
-          const totalCost =
-            (existingEntry?.totalCost ?? 0) + delta;
+          const totalCost = (existingEntry?.totalCost ?? 0) + delta;
           await markSynced(issueId, totalCost);
         } catch (err) {
           logError("Linear sync failed", err);

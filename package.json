@@ -14,7 +14,6 @@
   "keywords": ["claude-code", "linear", "cost-tracking"],
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.52.0",
     "@linear/sdk": "^39.0.0",
     "commander": "^13.0.0",
     "proper-lockfile": "^4.1.2"

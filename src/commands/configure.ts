@@ -58,33 +58,21 @@ export async function configure(cwd: string): Promise<void> {
   const user = await getCurrentUser(client);
   console.log(`\nLogged in as: ${user.name}`);
 
-  // Step 3: Anthropic API key for classification
-  let anthropicApiKey = existing?.anthropicApiKey ?? "";
-  if (!anthropicApiKey) {
-    console.log("\nStep 2: Anthropic API key (for issue classification)");
-    anthropicApiKey = await prompt("Enter shared team Anthropic API key: ");
-    if (!anthropicApiKey) {
-      console.error("Anthropic API key is required for issue classification.");
-      process.exit(1);
-    }
-  }
-
-  // Step 4: Find or create custom field
-  console.log("\nSetting up 'AI Spend ($)' custom field in Linear...");
+  // Step 3: Find or create custom field
+  console.log("\nStep 2: Setting up 'AI Spend ($)' custom field in Linear...");
   const customFieldId = await findOrCreateCustomField(client);
   console.log(`Custom field ready (${customFieldId})`);
 
-  // Step 5: Save config
+  // Step 4: Save config
   updateConfig({
     linearAccessToken: accessToken,
-    anthropicApiKey,
     linearCustomFieldId: customFieldId,
     linearUserId: user.id,
   });
   console.log("\nConfig saved to ~/.sprintspends/config.json");
 
-  // Step 6: Install Claude Code hook
-  console.log("\nInstalling Claude Code hook...");
+  // Step 5: Install Claude Code hook
+  console.log("\nStep 3: Installing Claude Code hook...");
   const hookResult = installHook();
   if (hookResult.alreadyInstalled) {
     console.log("Hook already installed in ~/.claude/settings.json");
@@ -92,5 +80,8 @@ export async function configure(cwd: string): Promise<void> {
     console.log("Hook installed in ~/.claude/settings.json");
   }
 
-  console.log("\nSetup complete! SprintSpends will now track AI costs automatically.");
+  console.log("\nSetup complete! SprintSpends will now:");
+  console.log("  - Track AI costs on every Claude Code turn");
+  console.log("  - Classify conversations to Linear issues (using Claude Code's own LLM)");
+  console.log("  - Update the 'AI Spend ($)' field on matched issues");
 }

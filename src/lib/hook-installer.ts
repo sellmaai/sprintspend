@@ -5,11 +5,26 @@ import { homedir } from "node:os";
 const CLAUDE_DIR = join(homedir(), ".claude");
 const SETTINGS_PATH = join(CLAUDE_DIR, "settings.json");
 
-const HOOK_COMMAND = "sprintspends track";
+const TRACK_COMMAND = "sprintspends track";
+const CLASSIFY_COMMAND = "sprintspends classify";
+
+interface HookEntry {
+  type: string;
+  command?: string;
+  prompt?: string;
+  async?: boolean;
+  [key: string]: unknown;
+}
 
 interface ClaudeSettings {
-  hooks?: Record<string, Array<{ matcher?: string; hooks: Array<Record<string, unknown>> }>>;
+  hooks?: Record<string, Array<{ matcher?: string; hooks: HookEntry[] }>>;
   [key: string]: unknown;
+}
+
+function isSprintSpendsHook(h: HookEntry): boolean {
+  return (
+    (h.type === "command" && (h.command === TRACK_COMMAND || h.command === CLASSIFY_COMMAND))
+  );
 }
 
 export function installHook(): { alreadyInstalled: boolean } {
@@ -34,22 +49,28 @@ export function installHook(): { alreadyInstalled: boolean } {
   const stopHooks = settings.hooks.Stop;
   if (stopHooks) {
     const hasSprintSpends = stopHooks.some((entry) =>
-      entry.hooks.some(
-        (h) => h.type === "command" && h.command === HOOK_COMMAND
-      )
+      entry.hooks.some(isSprintSpendsHook)
     );
     if (hasSprintSpends) return { alreadyInstalled: true };
   }
 
-  // Add our hook
+  // Add hooks: classify first (gets issue from Claude Code), then track (calculates cost + syncs)
   if (!settings.hooks.Stop) {
     settings.hooks.Stop = [];
   }
+
+  // Command hook: classify the conversation using Claude Code's own LLM,
+  // then track costs and sync to Linear
   settings.hooks.Stop.push({
     hooks: [
       {
         type: "command",
-        command: HOOK_COMMAND,
+        command: CLASSIFY_COMMAND,
+        async: true,
+      },
+      {
+        type: "command",
+        command: TRACK_COMMAND,
         async: true,
       },
     ],
@@ -69,10 +90,7 @@ export function uninstallHook(): boolean {
 
   const before = settings.hooks.Stop.length;
   settings.hooks.Stop = settings.hooks.Stop.filter(
-    (entry) =>
-      !entry.hooks.some(
-        (h) => h.type === "command" && h.command === HOOK_COMMAND
-      )
+    (entry) => !entry.hooks.some(isSprintSpendsHook)
   );
 
   if (settings.hooks.Stop.length === 0) {
@@ -91,9 +109,7 @@ export function isInstalled(): boolean {
     );
     return (
       settings.hooks?.Stop?.some((entry) =>
-        entry.hooks.some(
-          (h) => h.type === "command" && h.command === HOOK_COMMAND
-        )
+        entry.hooks.some(isSprintSpendsHook)
       ) ?? false
     );
   } catch {
