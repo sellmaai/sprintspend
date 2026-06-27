@@ -117,7 +117,6 @@ If no project matches: {"project": null, "confidence": "none"}`;
       confidence: parsed.confidence,
     };
 
-    // Cache classification for future turns
     const outPath = join(classifyDir(), `${sessionId}.json`);
     writeFileSync(outPath, JSON.stringify(classification), "utf-8");
 
@@ -132,7 +131,6 @@ export async function track(): Promise<void> {
   try {
     if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
 
-    // Read hook input from stdin
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {
       chunks.push(chunk as Buffer);
@@ -145,24 +143,20 @@ export async function track(): Promise<void> {
     const config = loadConfig();
     if (!config?.linearAccessToken) return;
 
-    // Parse transcript
     const usage = parseTranscript(transcript_path);
     if (usage.totalCost === 0) return;
 
     const existingEntry = await getEntryBySessionId(session_id);
 
-    // Classification: check cache first, then classify if needed
     let projectId = existingEntry?.linearProjectId ?? null;
     let projectName = existingEntry?.linearProjectName ?? null;
 
     if (!projectId) {
-      // Check cached classification file
       const cached = readClassification(session_id);
       if (cached) {
         projectId = cached.projectId;
         projectName = cached.projectName;
       } else if (usage.turnCount >= CLASSIFY_AFTER_TURNS) {
-        // Classify now
         const result = await classifySession(
           session_id,
           usage.conversationExcerpt,
@@ -175,7 +169,6 @@ export async function track(): Promise<void> {
       }
     }
 
-    // Save to ledger
     const entry: LedgerEntry = {
       sessionId: session_id,
       timestamp: new Date().toISOString(),
@@ -191,7 +184,6 @@ export async function track(): Promise<void> {
 
     await addOrUpdateEntry(entry);
 
-    // Sync to Linear as a project update
     if (projectId) {
       const delta = await getUnsyncedDelta(projectId);
       if (delta >= MIN_COST_DELTA_TO_SYNC) {

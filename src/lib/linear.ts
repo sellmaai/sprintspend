@@ -18,9 +18,6 @@ export async function getMyProjects(
   Array<{ id: string; name: string; description?: string }>
 > {
   const projects = await client.projects({
-    filter: {
-      state: { in: ["planned", "started"] },
-    },
     first: 50,
   });
 
