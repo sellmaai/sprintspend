@@ -2,6 +2,7 @@ import { findRepoConfig, updateConfig, loadConfig } from "../lib/config.js";
 import { performOAuthFlow } from "../lib/oauth-server.js";
 import { createLinearClient, getCurrentUser } from "../lib/linear.js";
 import { installHook } from "../lib/hook-installer.js";
+import { migrateLedger } from "../lib/ledger.js";
 import { createInterface } from "node:readline";
 
 function prompt(question: string): Promise<string> {
@@ -61,17 +62,19 @@ export async function configure(cwd: string): Promise<void> {
   });
   console.log("\nConfig saved to ~/.sprintspends/config.json");
 
-  // Step 4: Install Claude Code hook
-  console.log("\nStep 2: Installing Claude Code hook...");
-  const hookResult = installHook();
-  if (hookResult.alreadyInstalled) {
-    console.log("Hook already installed in ~/.claude/settings.json");
-  } else {
-    console.log("Hook installed in ~/.claude/settings.json");
+  // Step 4: Migrate any old data
+  const migrated = await migrateLedger();
+  if (migrated) {
+    console.log("\nMigrated ledger to latest format");
   }
+
+  // Step 5: Install/update Claude Code hook (always cleans up old hooks)
+  console.log("\nInstalling Claude Code hook...");
+  installHook();
+  console.log("Hook installed in ~/.claude/settings.json");
 
   console.log("\nSetup complete! SprintSpends will now:");
   console.log("  - Track AI costs on every Claude Code turn");
-  console.log("  - Classify conversations to Linear issues (using Claude Code's own LLM)");
-  console.log("  - Post AI spend as a comment on matched Linear issues");
+  console.log("  - Classify conversations to Linear projects (using Claude Code's own LLM)");
+  console.log("  - Post AI spend as a project update in Linear");
 }

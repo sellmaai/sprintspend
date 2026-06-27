@@ -117,3 +117,35 @@ export async function getLedger(): Promise<Ledger> {
   ensureLedgerFile();
   return readLedger();
 }
+
+// Migrate old ledger format and clean up stale data
+export async function migrateLedger(): Promise<boolean> {
+  ensureLedgerFile();
+  let migrated = false;
+
+  await withLedger((ledger) => {
+    // Clean up entries missing projectId fields (old issue-based entries)
+    const oldCount = ledger.entries.length;
+    ledger.entries = ledger.entries.filter((e) => "linearProjectId" in e);
+    if (ledger.entries.length !== oldCount) migrated = true;
+
+    // Reset projectTotals to match current entries
+    if (migrated) {
+      ledger.projectTotals = {};
+      for (const entry of ledger.entries) {
+        if (entry.linearProjectId) {
+          if (!ledger.projectTotals[entry.linearProjectId]) {
+            ledger.projectTotals[entry.linearProjectId] = {
+              totalCost: 0,
+              lastSyncedCost: 0,
+              lastSyncedAt: null,
+            };
+          }
+          ledger.projectTotals[entry.linearProjectId].totalCost += entry.totalCost;
+        }
+      }
+    }
+  });
+
+  return migrated;
+}
