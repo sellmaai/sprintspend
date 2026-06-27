@@ -2,6 +2,7 @@ import { findRepoConfig, updateConfig, loadConfig } from "../lib/config.js";
 import { performOAuthFlow } from "../lib/oauth-server.js";
 import { createLinearClient, getCurrentUser } from "../lib/linear.js";
 import { installHook } from "../lib/hook-installer.js";
+import { installGlobalRules } from "../lib/hook-installer.js";
 import { migrateLedger } from "../lib/ledger.js";
 import { createInterface } from "node:readline";
 
@@ -72,6 +73,10 @@ export async function configure(cwd: string): Promise<void> {
   console.log("\nInstalling Claude Code hook...");
   installHook();
   console.log("Hook installed in ~/.claude/settings.json");
+
+  // Step 6: Install global slash commands
+  installGlobalRules();
+  console.log("Slash commands installed in ~/.claude/rules/sprintspends.md");
 
   console.log("\nSetup complete! SprintSpends will now:");
   console.log("  - Track AI costs on every Claude Code turn");
