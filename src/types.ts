@@ -74,6 +74,7 @@ export interface LedgerEntry {
 
 // The full ledger
 export interface Ledger {
+  version: number;
   entries: LedgerEntry[];
   projectTotals: Record<
     string,

@@ -4,6 +4,7 @@ import {
   addOrUpdateEntry,
   getEntryBySessionId,
   withLedger,
+  migrateLedger,
 } from "../lib/ledger.js";
 import {
   createLinearClient,
@@ -160,6 +161,9 @@ export async function track(): Promise<void> {
       return;
     }
 
+    // Ensure ledger is migrated from old formats (safe to call repeatedly)
+    await migrateLedger();
+
     const usage = parseTranscript(transcript_path);
     log.debug(`Session ${session_id.slice(0, 8)}: turns=${usage.turnCount} cost=$${usage.totalCost.toFixed(4)} excerpt=${usage.conversationExcerpt.length}chars`);
     if (usage.totalCost === 0) return;
@@ -204,20 +208,36 @@ export async function track(): Promise<void> {
       syncedToLinear: false,
     };
 
-    await addOrUpdateEntry(entry);
+    const reclassifiedFrom = await addOrUpdateEntry(entry);
     log.verbose(`Tracked session ${session_id.slice(0, 8)}: $${usage.totalCost.toFixed(2)} → ${projectName ?? "unclassified"}`);
 
     // Sync to Linear under ledger lock to prevent race between parallel sessions
     if (projectId) {
       await withLedger(async (ledger) => {
+        const client = createLinearClient(config.linearAccessToken);
+
+        // If session was reclassified, re-sync the old project to decrement its cost
+        if (reclassifiedFrom) {
+          const oldTotals = ledger.projectTotals[reclassifiedFrom];
+          if (oldTotals) {
+            try {
+              log.verbose(`Re-syncing old project ${reclassifiedFrom} after reclassification: $${oldTotals.totalCost.toFixed(2)}`);
+              await updateProjectAiSpend(client, reclassifiedFrom, oldTotals.totalCost);
+              oldTotals.lastSyncedCost = oldTotals.totalCost;
+              oldTotals.lastSyncedAt = new Date().toISOString();
+            } catch (err) {
+              log.error("Failed to re-sync old project after reclassification", err);
+            }
+          }
+        }
+
         const totals = ledger.projectTotals[projectId!];
-        if (!totals) return;
+        if (!totals || totals.totalCost <= 0) return;
         const delta = totals.totalCost - totals.lastSyncedCost;
-        if (delta < MIN_COST_DELTA_TO_SYNC) return;
+        if (Math.abs(delta) < MIN_COST_DELTA_TO_SYNC) return;
 
         try {
           log.verbose(`Syncing ${projectName}: $${totals.lastSyncedCost.toFixed(2)} → $${totals.totalCost.toFixed(2)} (+$${delta.toFixed(2)})`);
-          const client = createLinearClient(config.linearAccessToken);
           await updateProjectAiSpend(client, projectId!, totals.totalCost);
           totals.lastSyncedCost = totals.totalCost;
           totals.lastSyncedAt = new Date().toISOString();

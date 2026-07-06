@@ -11,7 +11,7 @@ export async function getCurrentUser(
   return { id: me.id, name: me.name };
 }
 
-// Fetch active projects the user has access to
+// Fetch active projects the user has access to (excludes completed/cancelled)
 export async function getMyProjects(
   client: LinearClient
 ): Promise<
@@ -19,6 +19,10 @@ export async function getMyProjects(
 > {
   const projects = await client.projects({
     first: 50,
+    filter: {
+      completedAt: { null: true },
+      canceledAt: { null: true },
+    },
   });
 
   return projects.nodes.map((project) => ({
@@ -29,7 +33,7 @@ export async function getMyProjects(
 }
 
 // Parse existing cost breakdown from a SprintSpends project update
-// Format: "| @user | $12.50 |"
+// Handles both new table format ("| user | $12.50 |") and old single-line format ("**AI Spend: $45.50**")
 function parseCostBreakdown(body: string): Record<string, number> {
   const costs: Record<string, number> = {};
   const regex = /\|\s*(.+?)\s*\|\s*\$(\d+\.?\d*)\s*\|/g;
@@ -37,17 +41,44 @@ function parseCostBreakdown(body: string): Record<string, number> {
   while ((match = regex.exec(body)) !== null) {
     const name = match[1].trim();
     const cost = parseFloat(match[2]);
-    if (name && !isNaN(cost) && name !== "**Total**") {
+    if (name && !isNaN(cost) && name !== "**Total**" && name !== "Developer") {
       costs[name] = cost;
     }
   }
+
+  // Fallback: parse old format that had no per-developer table
+  // e.g. "**AI Spend: $45.50**"
+  if (Object.keys(costs).length === 0) {
+    const oldFormat = body.match(/\*\*AI Spend:\s*\$(\d+\.?\d*)\*\*/);
+    if (oldFormat) {
+      // Attribute old cost to "_legacy" so it's preserved in the table
+      const oldCost = parseFloat(oldFormat[1]);
+      if (!isNaN(oldCost) && oldCost > 0) {
+        costs["_legacy"] = oldCost;
+      }
+    }
+  }
+
   return costs;
 }
 
 // Build the project update body with per-user breakdown
 function buildUpdateBody(costs: Record<string, number>): string {
-  const total = Object.values(costs).reduce((sum, c) => sum + c, 0);
-  const rows = Object.entries(costs)
+  // Filter out zero/negative entries
+  const activeCosts = Object.fromEntries(
+    Object.entries(costs).filter(([, c]) => c > 0)
+  );
+  const total = Object.values(activeCosts).reduce((sum, c) => sum + c, 0);
+
+  if (Object.keys(activeCosts).length === 0) {
+    return `**AI Spend: $0.00**
+
+_No active costs tracked._
+
+_Tracked by SprintSpends_`;
+  }
+
+  const rows = Object.entries(activeCosts)
     .sort((a, b) => b[1] - a[1])
     .map(([name, cost]) => `| ${name} | $${cost.toFixed(2)} |`)
     .join("\n");
@@ -85,8 +116,12 @@ export async function updateProjectAiSpend(
     costs = parseCostBreakdown(existing.body);
   }
 
-  // Update this dev's cost
-  costs[userName] = userCost;
+  // Update this dev's cost (remove row if zero to keep table clean)
+  if (userCost > 0) {
+    costs[userName] = userCost;
+  } else {
+    delete costs[userName];
+  }
 
   const body = buildUpdateBody(costs);
 
