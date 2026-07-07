@@ -162,21 +162,27 @@ export function isClaudeInstalled(): boolean {
 export const isInstalled = isClaudeInstalled;
 
 // --- Codex hook support ---
+// Codex hooks.json uses the same nested format as Claude Code:
+// { hooks: { EventName: [{ matcher?, hooks: [{ type, command }] }] } }
+
+interface CodexHookEntry {
+  type: string;
+  command: string | string[];
+  timeout?: number;
+  [key: string]: unknown;
+}
 
 interface CodexHooksConfig {
-  hooks?: Array<{
-    event: string;
-    command: string[];
-    async?: boolean;
-    [key: string]: unknown;
-  }>;
+  hooks?: Record<string, Array<{ matcher?: string | null; hooks: CodexHookEntry[] }>>;
   [key: string]: unknown;
 }
 
 const CODEX_HOOKS_PATH = join(CODEX_DIR, "hooks.json");
+const CODEX_TRACK_COMMAND = "sprintspends track --codex";
 
-function isSprintSpendsCodexHook(h: { command: string[] }): boolean {
-  return h.command.some((arg) => arg.includes("sprintspends"));
+function isSprintSpendsCodexHook(h: CodexHookEntry): boolean {
+  const cmd = Array.isArray(h.command) ? h.command.join(" ") : h.command;
+  return cmd.includes("sprintspends");
 }
 
 export function installCodexHook(): { alreadyInstalled: boolean } {
@@ -194,17 +200,32 @@ export function installCodexHook(): { alreadyInstalled: boolean } {
   }
 
   if (!config.hooks) {
-    config.hooks = [];
+    config.hooks = {};
   }
 
-  // Remove any old sprintspends hooks
-  config.hooks = config.hooks.filter((h) => !isSprintSpendsCodexHook(h));
+  // Remove any old sprintspends hooks from all events
+  for (const event of Object.keys(config.hooks)) {
+    config.hooks[event] = config.hooks[event].filter(
+      (entry) => !entry.hooks.some(isSprintSpendsCodexHook)
+    );
+    if (config.hooks[event].length === 0) {
+      delete config.hooks[event];
+    }
+  }
 
   // Install the track hook on PostToolUse
-  config.hooks.push({
-    event: "PostToolUse",
-    command: ["sprintspends", "track", "--codex"],
-    async: true,
+  if (!config.hooks.PostToolUse) {
+    config.hooks.PostToolUse = [];
+  }
+
+  config.hooks.PostToolUse.push({
+    hooks: [
+      {
+        type: "command",
+        command: CODEX_TRACK_COMMAND,
+        timeout: 30,
+      },
+    ],
   });
 
   writeFileSync(CODEX_HOOKS_PATH, JSON.stringify(config, null, 2), "utf-8");
@@ -217,13 +238,19 @@ export function uninstallCodexHook(): boolean {
   const config: CodexHooksConfig = JSON.parse(
     readFileSync(CODEX_HOOKS_PATH, "utf-8")
   );
-  if (!config.hooks) return false;
+  if (!config.hooks?.PostToolUse) return false;
 
-  const before = config.hooks.length;
-  config.hooks = config.hooks.filter((h) => !isSprintSpendsCodexHook(h));
+  const before = config.hooks.PostToolUse.length;
+  config.hooks.PostToolUse = config.hooks.PostToolUse.filter(
+    (entry) => !entry.hooks.some(isSprintSpendsCodexHook)
+  );
+
+  if (config.hooks.PostToolUse.length === 0) {
+    delete config.hooks.PostToolUse;
+  }
 
   writeFileSync(CODEX_HOOKS_PATH, JSON.stringify(config, null, 2), "utf-8");
-  return config.hooks.length !== before;
+  return config.hooks.PostToolUse?.length !== before;
 }
 
 export function isCodexHookInstalled(): boolean {
@@ -232,7 +259,11 @@ export function isCodexHookInstalled(): boolean {
     const config: CodexHooksConfig = JSON.parse(
       readFileSync(CODEX_HOOKS_PATH, "utf-8")
     );
-    return config.hooks?.some(isSprintSpendsCodexHook) ?? false;
+    return (
+      config.hooks?.PostToolUse?.some((entry) =>
+        entry.hooks.some(isSprintSpendsCodexHook)
+      ) ?? false
+    );
   } catch {
     return false;
   }
