@@ -32,26 +32,29 @@ export async function getMyProjects(
   }));
 }
 
-// Parse existing cost breakdown from a SprintSpends project update
-// Handles both new table format ("| user | $12.50 |") and old single-line format ("**AI Spend: $45.50**")
+// Normalize developer name: strip backticks, convert " at " back to "@"
+// so all legacy variants resolve to the same key
+function normalizeName(raw: string): string {
+  return raw.replace(/^[`|\s]+|[`|\s]+$/g, "").replace(/\s+at\s+/g, "@").trim();
+}
+
+// Parse cost breakdown from the markdown table in a project update body
 function parseCostBreakdown(body: string): Record<string, number> {
   const costs: Record<string, number> = {};
   const regex = /\|\s*(.+?)\s*\|\s*\$(\d+\.?\d*)\s*\|/g;
   let match;
   while ((match = regex.exec(body)) !== null) {
-    const name = match[1].trim();
+    const name = normalizeName(match[1]);
     const cost = parseFloat(match[2]);
     if (name && !isNaN(cost) && name !== "**Total**" && name !== "Developer") {
-      costs[name] = cost;
+      costs[name] = Math.max(costs[name] ?? 0, cost);
     }
   }
 
-  // Fallback: parse old format that had no per-developer table
-  // e.g. "**AI Spend: $45.50**"
+  // Fallback: old single-line format
   if (Object.keys(costs).length === 0) {
     const oldFormat = body.match(/\*\*AI Spend:\s*\$(\d+\.?\d*)\*\*/);
     if (oldFormat) {
-      // Attribute old cost to "_legacy" so it's preserved in the table
       const oldCost = parseFloat(oldFormat[1]);
       if (!isNaN(oldCost) && oldCost > 0) {
         costs["_legacy"] = oldCost;
@@ -64,7 +67,6 @@ function parseCostBreakdown(body: string): Record<string, number> {
 
 // Build the project update body with per-user breakdown
 function buildUpdateBody(costs: Record<string, number>): string {
-  // Filter out zero/negative entries
   const activeCosts = Object.fromEntries(
     Object.entries(costs).filter(([, c]) => c > 0)
   );
@@ -80,7 +82,11 @@ _Tracked by SprintSpends_`;
 
   const rows = Object.entries(activeCosts)
     .sort((a, b) => b[1] - a[1])
-    .map(([name, cost]) => `| ${name} | $${cost.toFixed(2)} |`)
+    .map(([name, cost]) => {
+      // Wrap in backticks to prevent Linear from treating @ as a mention
+      const display = name.includes("@") ? `\`${name}\`` : name;
+      return `| ${display} | $${cost.toFixed(2)} |`;
+    })
     .join("\n");
 
   return `**AI Spend: $${total.toFixed(2)}**
