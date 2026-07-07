@@ -44,8 +44,6 @@ One command to install (or update) and configure:
 curl -fsSL https://raw.githubusercontent.com/sellmaai/sprintspend/main/install.sh | bash
 ```
 
-Or from Claude Code, type `/configure_linear`.
-
 This will:
 1. Clone/update the SprintSpends CLI
 2. Open your browser to authorize with Linear (OAuth)
