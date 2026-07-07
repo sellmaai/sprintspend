@@ -71,11 +71,12 @@ function parseCodexSessionMeta(filePath: string): CodexSessionInfo | null {
   };
 }
 
-function findAllCodexSessions(): CodexSessionInfo[] {
+function findLatestCodexSession(): CodexSessionInfo | null {
   const sessionsDir = join(homedir(), ".codex", "sessions");
-  if (!existsSync(sessionsDir)) return [];
+  if (!existsSync(sessionsDir)) return null;
 
-  const files: { path: string; mtime: number }[] = [];
+  let latestPath = "";
+  let latestMtime = 0;
 
   function walkDir(dir: string): void {
     try {
@@ -85,8 +86,9 @@ function findAllCodexSessions(): CodexSessionInfo[] {
           const stat = statSync(full);
           if (stat.isDirectory()) {
             walkDir(full);
-          } else if (entry.endsWith(".jsonl")) {
-            files.push({ path: full, mtime: stat.mtimeMs });
+          } else if (entry.endsWith(".jsonl") && stat.mtimeMs > latestMtime) {
+            latestMtime = stat.mtimeMs;
+            latestPath = full;
           }
         } catch { /* skip inaccessible */ }
       }
@@ -94,21 +96,8 @@ function findAllCodexSessions(): CodexSessionInfo[] {
   }
 
   walkDir(sessionsDir);
-
-  // Sort newest first
-  files.sort((a, b) => b.mtime - a.mtime);
-
-  const sessions: CodexSessionInfo[] = [];
-  for (const f of files) {
-    const info = parseCodexSessionMeta(f.path);
-    if (info && info.sessionId) sessions.push(info);
-  }
-  return sessions;
-}
-
-function findLatestCodexSession(): CodexSessionInfo | null {
-  const all = findAllCodexSessions();
-  return all[0] ?? null;
+  if (!latestPath) return null;
+  return parseCodexSessionMeta(latestPath);
 }
 
 function classifyDir(): string {
@@ -339,34 +328,6 @@ export async function trackSession(
       }
     });
   }
-}
-
-/**
- * Backfill all existing Codex sessions into the ledger.
- * Called by configure when Codex is detected.
- */
-export async function backfillCodexSessions(
-  config: { linearAccessToken: string; classifierCli?: "claude" | "codex" | "auto" }
-): Promise<number> {
-  const sessions = findAllCodexSessions();
-  if (sessions.length === 0) return 0;
-
-  await migrateLedger();
-
-  let tracked = 0;
-  for (const session of sessions) {
-    try {
-      const existing = await getEntryBySessionId(session.sessionId);
-      if (existing) {
-        log.debug(`Codex session ${session.sessionId.slice(0, 8)} already in ledger, updating`);
-      }
-      await trackSession(session.sessionId, session.transcriptPath, session.cwd, config);
-      tracked++;
-    } catch (err) {
-      log.error(`Failed to backfill Codex session ${session.sessionId.slice(0, 8)}`, err);
-    }
-  }
-  return tracked;
 }
 
 export async function track(opts?: { codex?: boolean }): Promise<void> {
