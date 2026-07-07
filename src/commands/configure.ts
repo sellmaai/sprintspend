@@ -9,6 +9,7 @@ import {
   isClaudeCliInstalled,
 } from "../lib/hook-installer.js";
 import { migrateLedger } from "../lib/ledger.js";
+import { backfillCodexSessions } from "./track.js";
 import { createInterface } from "node:readline";
 
 function prompt(question: string): Promise<string> {
@@ -92,6 +93,15 @@ export async function configure(cwd: string): Promise<void> {
     console.log("\nInstalling Codex hook...");
     installCodexHook();
     console.log("Hook installed in ~/.codex/hooks.json");
+
+    // Backfill existing Codex sessions
+    console.log("Backfilling existing Codex sessions...");
+    const count = await backfillCodexSessions({ linearAccessToken: accessToken });
+    if (count > 0) {
+      console.log(`Tracked ${count} existing Codex session${count === 1 ? "" : "s"}`);
+    } else {
+      console.log("No existing Codex sessions found");
+    }
   }
 
   if (!hasClaude && !hasCodex) {

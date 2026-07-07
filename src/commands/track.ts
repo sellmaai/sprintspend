@@ -42,13 +42,40 @@ function detectClassifierCli(preference?: "claude" | "codex" | "auto"): string |
 const MIN_COST_DELTA_TO_SYNC = 0.001;
 const CLASSIFY_AFTER_TURNS = 2;
 
-function findLatestCodexSession(): { sessionId: string; transcriptPath: string; cwd: string } | null {
-  const sessionsDir = join(homedir(), ".codex", "sessions");
-  if (!existsSync(sessionsDir)) return null;
+interface CodexSessionInfo {
+  sessionId: string;
+  transcriptPath: string;
+  cwd: string;
+}
 
-  // Walk the date-based directory structure to find the most recent .jsonl file
-  let latestPath = "";
-  let latestMtime = 0;
+function parseCodexSessionMeta(filePath: string): CodexSessionInfo | null {
+  try {
+    const firstLine = readFileSync(filePath, "utf-8").split("\n")[0]?.trim();
+    if (!firstLine) return null;
+    const meta = JSON.parse(firstLine);
+    if (meta.type === "session_meta" && meta.payload) {
+      return {
+        sessionId: meta.payload.id ?? "",
+        transcriptPath: filePath,
+        cwd: meta.payload.cwd ?? process.cwd(),
+      };
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: extract ID from filename
+  const match = filePath.match(/rollout-.*?-([\da-f-]+)\.jsonl$/);
+  return {
+    sessionId: match?.[1] ?? `codex-${Date.now()}`,
+    transcriptPath: filePath,
+    cwd: process.cwd(),
+  };
+}
+
+function findAllCodexSessions(): CodexSessionInfo[] {
+  const sessionsDir = join(homedir(), ".codex", "sessions");
+  if (!existsSync(sessionsDir)) return [];
+
+  const files: { path: string; mtime: number }[] = [];
 
   function walkDir(dir: string): void {
     try {
@@ -58,9 +85,8 @@ function findLatestCodexSession(): { sessionId: string; transcriptPath: string; 
           const stat = statSync(full);
           if (stat.isDirectory()) {
             walkDir(full);
-          } else if (entry.endsWith(".jsonl") && stat.mtimeMs > latestMtime) {
-            latestMtime = stat.mtimeMs;
-            latestPath = full;
+          } else if (entry.endsWith(".jsonl")) {
+            files.push({ path: full, mtime: stat.mtimeMs });
           }
         } catch { /* skip inaccessible */ }
       }
@@ -68,29 +94,21 @@ function findLatestCodexSession(): { sessionId: string; transcriptPath: string; 
   }
 
   walkDir(sessionsDir);
-  if (!latestPath) return null;
 
-  // Extract session ID and cwd from the first line (session_meta)
-  try {
-    const firstLine = readFileSync(latestPath, "utf-8").split("\n")[0]?.trim();
-    if (!firstLine) return null;
-    const meta = JSON.parse(firstLine);
-    if (meta.type === "session_meta" && meta.payload) {
-      return {
-        sessionId: meta.payload.id ?? "",
-        transcriptPath: latestPath,
-        cwd: meta.payload.cwd ?? process.cwd(),
-      };
-    }
-  } catch { /* fall through */ }
+  // Sort newest first
+  files.sort((a, b) => b.mtime - a.mtime);
 
-  // Fallback: extract ID from filename
-  const match = latestPath.match(/rollout-.*?-([\da-f-]+)\.jsonl$/);
-  return {
-    sessionId: match?.[1] ?? `codex-${Date.now()}`,
-    transcriptPath: latestPath,
-    cwd: process.cwd(),
-  };
+  const sessions: CodexSessionInfo[] = [];
+  for (const f of files) {
+    const info = parseCodexSessionMeta(f.path);
+    if (info && info.sessionId) sessions.push(info);
+  }
+  return sessions;
+}
+
+function findLatestCodexSession(): CodexSessionInfo | null {
+  const all = findAllCodexSessions();
+  return all[0] ?? null;
 }
 
 function classifyDir(): string {
@@ -222,6 +240,135 @@ If no project matches: {"project": null, "confidence": "none"}`;
   }
 }
 
+/**
+ * Core tracking logic: parse a transcript, classify, ledger, sync.
+ * Reusable by both the hook-triggered track command and the configure backfill.
+ */
+export async function trackSession(
+  session_id: string,
+  transcript_path: string,
+  cwd: string,
+  config: { linearAccessToken: string; classifierCli?: "claude" | "codex" | "auto" },
+  opts?: { skipClassification?: boolean }
+): Promise<void> {
+  const usage = parseAnyTranscript(transcript_path);
+  log.debug(`Session ${session_id.slice(0, 8)} [${usage.provider}]: turns=${usage.turnCount} cost=$${usage.totalCost.toFixed(4)} excerpt=${usage.conversationExcerpt.length}chars`);
+  if (usage.totalCost === 0) return;
+
+  const existingEntry = await getEntryBySessionId(session_id);
+
+  let projectId = existingEntry?.linearProjectId ?? null;
+  let projectName = existingEntry?.linearProjectName ?? null;
+
+  if (!projectId && !opts?.skipClassification) {
+    const cached = readClassification(session_id);
+    if (cached) {
+      projectId = cached.projectId;
+      projectName = cached.projectName;
+      log.debug(`Using cached classification: ${cached.projectName}`);
+    } else if (usage.turnCount >= CLASSIFY_AFTER_TURNS) {
+      log.verbose(`Classifying session ${session_id.slice(0, 8)}...`);
+      const result = await classifySession(
+        session_id,
+        usage.conversationExcerpt,
+        config.linearAccessToken,
+        config.classifierCli
+      );
+      if (result) {
+        projectId = result.projectId;
+        projectName = result.projectName;
+      }
+    } else {
+      log.debug(`Skipping classification: turn ${usage.turnCount} < ${CLASSIFY_AFTER_TURNS}`);
+    }
+  }
+
+  const entry: LedgerEntry = {
+    sessionId: session_id,
+    timestamp: new Date().toISOString(),
+    cwd,
+    provider: usage.provider,
+    linearProjectId: projectId,
+    linearProjectName: projectName,
+    models: usage.models,
+    totalCost: usage.totalCost,
+    turnCount: usage.turnCount,
+    lastTrackedTurnCount: usage.turnCount,
+    syncedToLinear: false,
+  };
+
+  const reclassifiedFrom = await addOrUpdateEntry(entry);
+  log.verbose(`Tracked session ${session_id.slice(0, 8)}: $${usage.totalCost.toFixed(2)} → ${projectName ?? "unclassified"}`);
+
+  // Sync to Linear under ledger lock to prevent race between parallel sessions
+  if (projectId) {
+    await withLedger(async (ledger) => {
+      const client = createLinearClient(config.linearAccessToken);
+
+      // If session was reclassified, re-sync the old project to decrement its cost
+      if (reclassifiedFrom) {
+        const oldTotals = ledger.projectTotals[reclassifiedFrom];
+        if (oldTotals) {
+          try {
+            log.verbose(`Re-syncing old project ${reclassifiedFrom} after reclassification: $${oldTotals.totalCost.toFixed(2)}`);
+            await updateProjectAiSpend(client, reclassifiedFrom, oldTotals.totalCost);
+            oldTotals.lastSyncedCost = oldTotals.totalCost;
+            oldTotals.lastSyncedAt = new Date().toISOString();
+          } catch (err) {
+            log.error("Failed to re-sync old project after reclassification", err);
+          }
+        }
+      }
+
+      const totals = ledger.projectTotals[projectId!];
+      if (!totals || totals.totalCost <= 0) return;
+      const delta = totals.totalCost - totals.lastSyncedCost;
+      if (Math.abs(delta) < MIN_COST_DELTA_TO_SYNC) return;
+
+      try {
+        log.verbose(`Syncing ${projectName}: $${totals.lastSyncedCost.toFixed(2)} → $${totals.totalCost.toFixed(2)} (+$${delta.toFixed(2)})`);
+        await updateProjectAiSpend(client, projectId!, totals.totalCost);
+        totals.lastSyncedCost = totals.totalCost;
+        totals.lastSyncedAt = new Date().toISOString();
+        for (const e of ledger.entries) {
+          if (e.linearProjectId === projectId) e.syncedToLinear = true;
+        }
+        log.info(`Synced $${totals.totalCost.toFixed(2)} to ${projectName}`);
+      } catch (err) {
+        log.error("Linear sync failed", err);
+      }
+    });
+  }
+}
+
+/**
+ * Backfill all existing Codex sessions into the ledger.
+ * Called by configure when Codex is detected.
+ */
+export async function backfillCodexSessions(
+  config: { linearAccessToken: string; classifierCli?: "claude" | "codex" | "auto" }
+): Promise<number> {
+  const sessions = findAllCodexSessions();
+  if (sessions.length === 0) return 0;
+
+  await migrateLedger();
+
+  let tracked = 0;
+  for (const session of sessions) {
+    try {
+      const existing = await getEntryBySessionId(session.sessionId);
+      if (existing) {
+        log.debug(`Codex session ${session.sessionId.slice(0, 8)} already in ledger, updating`);
+      }
+      await trackSession(session.sessionId, session.transcriptPath, session.cwd, config);
+      tracked++;
+    } catch (err) {
+      log.error(`Failed to backfill Codex session ${session.sessionId.slice(0, 8)}`, err);
+    }
+  }
+  return tracked;
+}
+
 export async function track(opts?: { codex?: boolean }): Promise<void> {
   try {
     if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
@@ -263,97 +410,8 @@ export async function track(opts?: { codex?: boolean }): Promise<void> {
       return;
     }
 
-    // Ensure ledger is migrated from old formats (safe to call repeatedly)
     await migrateLedger();
-
-    const usage = parseAnyTranscript(transcript_path);
-    log.debug(`Session ${session_id.slice(0, 8)} [${usage.provider}]: turns=${usage.turnCount} cost=$${usage.totalCost.toFixed(4)} excerpt=${usage.conversationExcerpt.length}chars`);
-    if (usage.totalCost === 0) return;
-
-    const existingEntry = await getEntryBySessionId(session_id);
-
-    let projectId = existingEntry?.linearProjectId ?? null;
-    let projectName = existingEntry?.linearProjectName ?? null;
-
-    if (!projectId) {
-      const cached = readClassification(session_id);
-      if (cached) {
-        projectId = cached.projectId;
-        projectName = cached.projectName;
-        log.debug(`Using cached classification: ${cached.projectName}`);
-      } else if (usage.turnCount >= CLASSIFY_AFTER_TURNS) {
-        log.verbose(`Classifying session ${session_id.slice(0, 8)}...`);
-        const result = await classifySession(
-          session_id,
-          usage.conversationExcerpt,
-          config.linearAccessToken,
-          config.classifierCli
-        );
-        if (result) {
-          projectId = result.projectId;
-          projectName = result.projectName;
-        }
-      } else {
-        log.debug(`Skipping classification: turn ${usage.turnCount} < ${CLASSIFY_AFTER_TURNS}`);
-      }
-    }
-
-    const entry: LedgerEntry = {
-      sessionId: session_id,
-      timestamp: new Date().toISOString(),
-      cwd,
-      provider: usage.provider,
-      linearProjectId: projectId,
-      linearProjectName: projectName,
-      models: usage.models,
-      totalCost: usage.totalCost,
-      turnCount: usage.turnCount,
-      lastTrackedTurnCount: usage.turnCount,
-      syncedToLinear: false,
-    };
-
-    const reclassifiedFrom = await addOrUpdateEntry(entry);
-    log.verbose(`Tracked session ${session_id.slice(0, 8)}: $${usage.totalCost.toFixed(2)} → ${projectName ?? "unclassified"}`);
-
-    // Sync to Linear under ledger lock to prevent race between parallel sessions
-    if (projectId) {
-      await withLedger(async (ledger) => {
-        const client = createLinearClient(config.linearAccessToken);
-
-        // If session was reclassified, re-sync the old project to decrement its cost
-        if (reclassifiedFrom) {
-          const oldTotals = ledger.projectTotals[reclassifiedFrom];
-          if (oldTotals) {
-            try {
-              log.verbose(`Re-syncing old project ${reclassifiedFrom} after reclassification: $${oldTotals.totalCost.toFixed(2)}`);
-              await updateProjectAiSpend(client, reclassifiedFrom, oldTotals.totalCost);
-              oldTotals.lastSyncedCost = oldTotals.totalCost;
-              oldTotals.lastSyncedAt = new Date().toISOString();
-            } catch (err) {
-              log.error("Failed to re-sync old project after reclassification", err);
-            }
-          }
-        }
-
-        const totals = ledger.projectTotals[projectId!];
-        if (!totals || totals.totalCost <= 0) return;
-        const delta = totals.totalCost - totals.lastSyncedCost;
-        if (Math.abs(delta) < MIN_COST_DELTA_TO_SYNC) return;
-
-        try {
-          log.verbose(`Syncing ${projectName}: $${totals.lastSyncedCost.toFixed(2)} → $${totals.totalCost.toFixed(2)} (+$${delta.toFixed(2)})`);
-          await updateProjectAiSpend(client, projectId!, totals.totalCost);
-          totals.lastSyncedCost = totals.totalCost;
-          totals.lastSyncedAt = new Date().toISOString();
-          for (const e of ledger.entries) {
-            if (e.linearProjectId === projectId) e.syncedToLinear = true;
-          }
-          log.info(`Synced $${totals.totalCost.toFixed(2)} to ${projectName}`);
-        } catch (err) {
-          log.error("Linear sync failed", err);
-        }
-      });
-    }
+    await trackSession(session_id, transcript_path, cwd, config);
   } catch (err) {
     log.error("Track command failed", err);
   }
