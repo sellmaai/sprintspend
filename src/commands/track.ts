@@ -1,5 +1,5 @@
 import { loadConfig, getConfigDir } from "../lib/config.js";
-import { parseTranscript } from "../lib/transcript.js";
+import { parseAnyTranscript } from "../lib/transcript-detect.js";
 import {
   addOrUpdateEntry,
   getEntryBySessionId,
@@ -12,13 +12,86 @@ import {
   updateProjectAiSpend,
 } from "../lib/linear.js";
 import { log, initLogLevel } from "../lib/logger.js";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { execSync, execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import type { HookInput, LedgerEntry } from "../types.js";
+
+function detectClassifierCli(preference?: "claude" | "codex" | "auto"): string | null {
+  if (preference && preference !== "auto") {
+    try {
+      execFileSync("which", [preference], { stdio: "pipe" });
+      return preference;
+    } catch {
+      log.debug(`Preferred classifier CLI "${preference}" not found`);
+    }
+  }
+  // Auto-detect: prefer claude (cheaper classification), fall back to codex
+  for (const cli of ["claude", "codex"]) {
+    try {
+      execFileSync("which", [cli], { stdio: "pipe" });
+      return cli;
+    } catch {
+      // Not installed
+    }
+  }
+  return null;
+}
 
 const MIN_COST_DELTA_TO_SYNC = 0.001;
 const CLASSIFY_AFTER_TURNS = 2;
+
+function findLatestCodexSession(): { sessionId: string; transcriptPath: string; cwd: string } | null {
+  const sessionsDir = join(homedir(), ".codex", "sessions");
+  if (!existsSync(sessionsDir)) return null;
+
+  // Walk the date-based directory structure to find the most recent .jsonl file
+  let latestPath = "";
+  let latestMtime = 0;
+
+  function walkDir(dir: string): void {
+    try {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        try {
+          const stat = statSync(full);
+          if (stat.isDirectory()) {
+            walkDir(full);
+          } else if (entry.endsWith(".jsonl") && stat.mtimeMs > latestMtime) {
+            latestMtime = stat.mtimeMs;
+            latestPath = full;
+          }
+        } catch { /* skip inaccessible */ }
+      }
+    } catch { /* skip inaccessible */ }
+  }
+
+  walkDir(sessionsDir);
+  if (!latestPath) return null;
+
+  // Extract session ID and cwd from the first line (session_meta)
+  try {
+    const firstLine = readFileSync(latestPath, "utf-8").split("\n")[0]?.trim();
+    if (!firstLine) return null;
+    const meta = JSON.parse(firstLine);
+    if (meta.type === "session_meta" && meta.payload) {
+      return {
+        sessionId: meta.payload.id ?? "",
+        transcriptPath: latestPath,
+        cwd: meta.payload.cwd ?? process.cwd(),
+      };
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: extract ID from filename
+  const match = latestPath.match(/rollout-.*?-([\da-f-]+)\.jsonl$/);
+  return {
+    sessionId: match?.[1] ?? `codex-${Date.now()}`,
+    transcriptPath: latestPath,
+    cwd: process.cwd(),
+  };
+}
 
 function classifyDir(): string {
   const dir = join(getConfigDir(), "classifications");
@@ -45,9 +118,16 @@ function readClassification(sessionId: string): ClassificationFile | null {
 async function classifySession(
   sessionId: string,
   conversationExcerpt: string,
-  linearAccessToken: string
+  linearAccessToken: string,
+  classifierCliPref?: "claude" | "codex" | "auto"
 ): Promise<ClassificationFile | null> {
   try {
+    const classifierCli = detectClassifierCli(classifierCliPref);
+    if (!classifierCli) {
+      log.verbose("No classifier CLI (claude or codex) found, skipping classification");
+      return null;
+    }
+
     const client = createLinearClient(linearAccessToken);
     const projects = await getMyProjects(client);
     log.debug(`Fetched ${projects.length} projects: ${projects.map(p => p.name).join(", ")}`);
@@ -63,7 +143,7 @@ async function classifySession(
       })
       .join("\n");
 
-    const prompt = `You are classifying a developer's Claude Code conversation to determine which Linear project they are working on.
+    const prompt = `You are classifying a developer's AI coding session to determine which Linear project they are working on.
 
 ## Active Linear Projects
 ${projectList}
@@ -79,19 +159,21 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 Use "high" if the match is clear, "low" if it's a guess.
 If no project matches: {"project": null, "confidence": "none"}`;
 
-    log.debug("Calling claude -p for classification");
-    const result = execSync(
-      `claude -p --model haiku --output-format json`,
-      {
-        input: prompt,
-        encoding: "utf-8",
-        timeout: 30_000,
-        stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, SPRINTSPENDS_CLASSIFYING: "1" },
-      }
-    );
+    // Build CLI command based on detected classifier
+    const cmd = classifierCli === "claude"
+      ? `claude -p --model haiku --output-format json`
+      : `codex -p --model o4-mini`;
 
-    log.debug(`claude -p response: ${result.slice(0, 300)}`);
+    log.debug(`Calling ${cmd} for classification`);
+    const result = execSync(cmd, {
+      input: prompt,
+      encoding: "utf-8",
+      timeout: 30_000,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, SPRINTSPENDS_CLASSIFYING: "1" },
+    });
+
+    log.debug(`Classifier response: ${result.slice(0, 300)}`);
 
     let parsed: { project: string | null; confidence: string };
     try {
@@ -102,7 +184,7 @@ If no project matches: {"project": null, "confidence": "none"}`;
     } catch {
       const match = result.match(/\{[^}]+\}/);
       if (!match) {
-        log.error("Could not parse classification response from claude -p");
+        log.error("Could not parse classification response");
         return null;
       }
       parsed = JSON.parse(match[0]);
@@ -140,19 +222,39 @@ If no project matches: {"project": null, "confidence": "none"}`;
   }
 }
 
-export async function track(): Promise<void> {
+export async function track(opts?: { codex?: boolean }): Promise<void> {
   try {
     if (process.env.SPRINTSPENDS_CLASSIFYING === "1") return;
 
     initLogLevel();
 
-    const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) {
-      chunks.push(chunk as Buffer);
-    }
-    const input: HookInput = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+    let session_id: string;
+    let transcript_path: string;
+    let cwd: string;
 
-    const { session_id, transcript_path, cwd } = input;
+    if (opts?.codex) {
+      // Codex hook mode: find the latest session file
+      const codexSession = findLatestCodexSession();
+      if (!codexSession) {
+        log.debug("No Codex session found, skipping");
+        return;
+      }
+      session_id = codexSession.sessionId;
+      transcript_path = codexSession.transcriptPath;
+      cwd = codexSession.cwd;
+      log.debug(`Codex mode: found session ${session_id.slice(0, 8)} at ${transcript_path}`);
+    } else {
+      // Claude Code hook mode: read HookInput from stdin
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) {
+        chunks.push(chunk as Buffer);
+      }
+      const input: HookInput = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+      session_id = input.session_id;
+      transcript_path = input.transcript_path;
+      cwd = input.cwd;
+    }
+
     if (!session_id || !transcript_path) return;
 
     const config = loadConfig();
@@ -164,8 +266,8 @@ export async function track(): Promise<void> {
     // Ensure ledger is migrated from old formats (safe to call repeatedly)
     await migrateLedger();
 
-    const usage = parseTranscript(transcript_path);
-    log.debug(`Session ${session_id.slice(0, 8)}: turns=${usage.turnCount} cost=$${usage.totalCost.toFixed(4)} excerpt=${usage.conversationExcerpt.length}chars`);
+    const usage = parseAnyTranscript(transcript_path);
+    log.debug(`Session ${session_id.slice(0, 8)} [${usage.provider}]: turns=${usage.turnCount} cost=$${usage.totalCost.toFixed(4)} excerpt=${usage.conversationExcerpt.length}chars`);
     if (usage.totalCost === 0) return;
 
     const existingEntry = await getEntryBySessionId(session_id);
@@ -184,7 +286,8 @@ export async function track(): Promise<void> {
         const result = await classifySession(
           session_id,
           usage.conversationExcerpt,
-          config.linearAccessToken
+          config.linearAccessToken,
+          config.classifierCli
         );
         if (result) {
           projectId = result.projectId;
@@ -199,6 +302,7 @@ export async function track(): Promise<void> {
       sessionId: session_id,
       timestamp: new Date().toISOString(),
       cwd,
+      provider: usage.provider,
       linearProjectId: projectId,
       linearProjectName: projectName,
       models: usage.models,

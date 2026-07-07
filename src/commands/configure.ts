@@ -1,8 +1,13 @@
 import { findRepoConfig, updateConfig, loadConfig } from "../lib/config.js";
 import { performOAuthFlow } from "../lib/oauth-server.js";
 import { createLinearClient, getCurrentUser } from "../lib/linear.js";
-import { installHook } from "../lib/hook-installer.js";
-import { installGlobalRules } from "../lib/hook-installer.js";
+import {
+  installHook,
+  installGlobalRules,
+  installCodexHook,
+  isCodexCliInstalled,
+  isClaudeCliInstalled,
+} from "../lib/hook-installer.js";
 import { migrateLedger } from "../lib/ledger.js";
 import { createInterface } from "node:readline";
 
@@ -69,17 +74,34 @@ export async function configure(cwd: string): Promise<void> {
     console.log("\nMigrated ledger to latest format");
   }
 
-  // Step 5: Install/update Claude Code hook (always cleans up old hooks)
-  console.log("\nInstalling Claude Code hook...");
-  installHook();
-  console.log("Hook installed in ~/.claude/settings.json");
+  // Step 5: Install hooks for detected AI tools
+  const hasClaude = isClaudeCliInstalled();
+  const hasCodex = isCodexCliInstalled();
 
-  // Step 6: Install global slash commands
-  installGlobalRules();
-  console.log("Slash commands installed in ~/.claude/rules/sprintspends.md");
+  if (hasClaude) {
+    console.log("\nInstalling Claude Code hook...");
+    installHook();
+    console.log("Hook installed in ~/.claude/settings.json");
 
-  console.log("\nSetup complete! SprintSpends will now:");
-  console.log("  - Track AI costs on every Claude Code turn");
-  console.log("  - Classify conversations to Linear projects (using Claude Code's own LLM)");
+    // Install global slash commands for Claude Code
+    installGlobalRules();
+    console.log("Slash commands installed in ~/.claude/commands/");
+  }
+
+  if (hasCodex) {
+    console.log("\nInstalling Codex hook...");
+    installCodexHook();
+    console.log("Hook installed in ~/.codex/hooks.json");
+  }
+
+  if (!hasClaude && !hasCodex) {
+    console.log("\nWarning: Neither Claude Code nor Codex CLI detected.");
+    console.log("Install at least one to track AI costs automatically.");
+  }
+
+  const tools = [hasClaude && "Claude Code", hasCodex && "Codex"].filter(Boolean).join(" and ");
+  console.log(`\nSetup complete! SprintSpends will now:`);
+  console.log(`  - Track AI costs from ${tools || "your AI coding tools"}`);
+  console.log("  - Classify conversations to Linear projects");
   console.log("  - Post AI spend as a project update in Linear");
 }
