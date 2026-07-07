@@ -1,3 +1,5 @@
+export type Provider = "anthropic" | "openai";
+
 // Hook input from Claude Code's Stop event (received on stdin)
 export interface HookInput {
   session_id: string;
@@ -14,6 +16,7 @@ export interface TokenUsage {
   cache_read_input_tokens: number;
   ephemeral_5m_input_tokens: number;
   ephemeral_1h_input_tokens: number;
+  reasoning_output_tokens: number;
 }
 
 // Aggregated usage per model across a session
@@ -24,6 +27,7 @@ export interface ModelUsage {
   cacheWrite5mTokens: number;
   cacheWrite1hTokens: number;
   cacheReadTokens: number;
+  reasoningOutputTokens: number;
   cost: number;
 }
 
@@ -31,6 +35,7 @@ export interface ModelUsage {
 export interface SessionUsage {
   sessionId: string;
   cwd: string;
+  provider: Provider;
   models: Record<string, ModelUsage>;
   totalCost: number;
   turnCount: number;
@@ -44,6 +49,7 @@ export interface ModelPricing {
   cacheWrite5mPerMTok: number;
   cacheWrite1hPerMTok: number;
   cacheReadPerMTok: number;
+  reasoningOutputPerMTok: number;
 }
 
 // Local config stored at ~/.sprintspends/config.json
@@ -51,6 +57,7 @@ export interface Config {
   linearAccessToken: string;
   linearUserId: string;
   logLevel?: "debug" | "verbose" | "info" | "error";
+  classifierCli?: "claude" | "codex" | "auto";
 }
 
 // .sprintspends.json in the repo root (committed)
@@ -63,6 +70,7 @@ export interface LedgerEntry {
   sessionId: string;
   timestamp: string;
   cwd: string;
+  provider?: Provider;
   linearProjectId: string | null;
   linearProjectName: string | null;
   models: Record<string, ModelUsage>;

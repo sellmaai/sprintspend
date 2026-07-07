@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
-import type { SessionUsage, ModelUsage, TokenUsage } from "../types.js";
+import type { SessionUsage, ModelUsage, TokenUsage, Provider } from "../types.js";
 import { calculateCost } from "./pricing.js";
 
 interface TranscriptLine {
@@ -44,6 +44,7 @@ function extractUsage(line: TranscriptLine): {
       cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
       ephemeral_5m_input_tokens: cache?.ephemeral_5m_input_tokens ?? u.cache_creation_input_tokens ?? 0,
       ephemeral_1h_input_tokens: cache?.ephemeral_1h_input_tokens ?? 0,
+      reasoning_output_tokens: 0,
     },
   };
 }
@@ -130,6 +131,7 @@ export function parseTranscript(transcriptPath: string): SessionUsage {
             cacheWrite5mTokens: 0,
             cacheWrite1hTokens: 0,
             cacheReadTokens: 0,
+            reasoningOutputTokens: 0,
             cost: 0,
           };
         }
@@ -139,6 +141,7 @@ export function parseTranscript(transcriptPath: string): SessionUsage {
         m.cacheWrite5mTokens += usage.ephemeral_5m_input_tokens;
         m.cacheWrite1hTokens += usage.ephemeral_1h_input_tokens;
         m.cacheReadTokens += usage.cache_read_input_tokens;
+        m.reasoningOutputTokens += usage.reasoning_output_tokens;
         m.cost += calculateCost(model, usage);
       }
 
@@ -162,6 +165,7 @@ export function parseTranscript(transcriptPath: string): SessionUsage {
   return {
     sessionId,
     cwd,
+    provider: "anthropic" as Provider,
     models,
     totalCost,
     turnCount,

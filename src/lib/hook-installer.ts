@@ -1,9 +1,11 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const SETTINGS_PATH = join(CLAUDE_DIR, "settings.json");
+const CODEX_DIR = join(homedir(), ".codex");
 
 const TRACK_COMMAND = "sprintspends track";
 
@@ -140,7 +142,7 @@ export function installGlobalRules(): void {
   }
 }
 
-export function isInstalled(): boolean {
+export function isClaudeInstalled(): boolean {
   if (!existsSync(SETTINGS_PATH)) return false;
   try {
     const settings: ClaudeSettings = JSON.parse(
@@ -151,6 +153,104 @@ export function isInstalled(): boolean {
         entry.hooks.some(isSprintSpendsHook)
       ) ?? false
     );
+  } catch {
+    return false;
+  }
+}
+
+// Keep old name as alias for backward compatibility
+export const isInstalled = isClaudeInstalled;
+
+// --- Codex hook support ---
+
+interface CodexHooksConfig {
+  hooks?: Array<{
+    event: string;
+    command: string[];
+    async?: boolean;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
+const CODEX_HOOKS_PATH = join(CODEX_DIR, "hooks.json");
+
+function isSprintSpendsCodexHook(h: { command: string[] }): boolean {
+  return h.command.some((arg) => arg.includes("sprintspends"));
+}
+
+export function installCodexHook(): { alreadyInstalled: boolean } {
+  if (!existsSync(CODEX_DIR)) {
+    mkdirSync(CODEX_DIR, { recursive: true });
+  }
+
+  let config: CodexHooksConfig = {};
+  if (existsSync(CODEX_HOOKS_PATH)) {
+    try {
+      config = JSON.parse(readFileSync(CODEX_HOOKS_PATH, "utf-8"));
+    } catch {
+      // Start fresh if corrupted
+    }
+  }
+
+  if (!config.hooks) {
+    config.hooks = [];
+  }
+
+  // Remove any old sprintspends hooks
+  config.hooks = config.hooks.filter((h) => !isSprintSpendsCodexHook(h));
+
+  // Install the track hook on PostToolUse
+  config.hooks.push({
+    event: "PostToolUse",
+    command: ["sprintspends", "track", "--codex"],
+    async: true,
+  });
+
+  writeFileSync(CODEX_HOOKS_PATH, JSON.stringify(config, null, 2), "utf-8");
+  return { alreadyInstalled: false };
+}
+
+export function uninstallCodexHook(): boolean {
+  if (!existsSync(CODEX_HOOKS_PATH)) return false;
+
+  const config: CodexHooksConfig = JSON.parse(
+    readFileSync(CODEX_HOOKS_PATH, "utf-8")
+  );
+  if (!config.hooks) return false;
+
+  const before = config.hooks.length;
+  config.hooks = config.hooks.filter((h) => !isSprintSpendsCodexHook(h));
+
+  writeFileSync(CODEX_HOOKS_PATH, JSON.stringify(config, null, 2), "utf-8");
+  return config.hooks.length !== before;
+}
+
+export function isCodexHookInstalled(): boolean {
+  if (!existsSync(CODEX_HOOKS_PATH)) return false;
+  try {
+    const config: CodexHooksConfig = JSON.parse(
+      readFileSync(CODEX_HOOKS_PATH, "utf-8")
+    );
+    return config.hooks?.some(isSprintSpendsCodexHook) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+export function isCodexCliInstalled(): boolean {
+  try {
+    execFileSync("which", ["codex"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isClaudeCliInstalled(): boolean {
+  try {
+    execFileSync("which", ["claude"], { stdio: "pipe" });
+    return true;
   } catch {
     return false;
   }

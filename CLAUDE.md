@@ -1,6 +1,6 @@
 # SprintSpends
 
-AI cost tracking for Linear via Claude Code hooks.
+AI cost tracking for Linear via Claude Code and Codex hooks.
 
 ## Slash Commands
 
@@ -30,8 +30,8 @@ npm test             # Run tests
 
 ## How It Works
 
-1. A Claude Code `Stop` hook fires after each assistant turn (async, non-blocking)
-2. `sprintspends track` parses the session transcript for token usage and calculates cost
-3. After 2 turns, it classifies the conversation to a Linear project using `claude -p --model haiku`
-4. Cost is stored in a local ledger (`~/.sprintspends/ledger.json`)
-5. A project update is posted to Linear with per-developer cost breakdown
+1. A Claude Code `Stop` hook or Codex `PostToolUse` hook fires after activity (async, non-blocking)
+2. `sprintspends track` auto-detects the transcript format and parses token usage
+3. After 2 turns, it classifies the conversation to a Linear project using whichever CLI is available (`claude` or `codex`)
+4. Cost is stored in a local ledger (`~/.sprintspends/ledger.json`) with provider tracking
+5. A project update is posted to Linear with per-developer cost breakdown (combined across all tools)

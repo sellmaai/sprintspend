@@ -10,21 +10,22 @@ const program = new Command();
 
 program
   .name("sprintspends")
-  .description("AI cost tracking for Linear via Claude Code hooks")
+  .description("AI cost tracking for Linear via Claude Code and Codex hooks")
   .version("0.1.0");
 
 program
   .command("configure")
-  .description("Set up Linear OAuth and install Claude Code hook")
+  .description("Set up Linear OAuth and install hooks for Claude Code and Codex")
   .action(async () => {
     await configure(process.cwd());
   });
 
 program
   .command("track")
-  .description("Track costs from a Claude Code session (called by hook)")
-  .action(async () => {
-    await track();
+  .description("Track costs from a Claude Code or Codex session (called by hook)")
+  .option("--codex", "Track from latest Codex session (used by Codex hook)")
+  .action(async (opts: { codex?: boolean }) => {
+    await track(opts);
   });
 
 program
