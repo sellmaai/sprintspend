@@ -6,22 +6,18 @@ AI cost tracking for Linear via Claude Code hooks.
 
 ### /configure_linear
 
-Set up SprintSpends for this developer. Run `sprintspends configure` in the terminal. This will:
-1. Read the Linear OAuth client ID from `.sprintspends.json` in the repo
-2. Open the browser to authorize with Linear (OAuth)
-3. Install the Claude Code Stop hook in `~/.claude/settings.json`
-
-If `sprintspends` is not installed, install it first:
+Install/update and configure SprintSpends in one step:
 ```bash
-git clone https://github.com/sellmaai/sprintspend.git ~/.sprintspends/app
-cd ~/.sprintspends/app && npm install && npm run build && npm link
+curl -fsSL https://raw.githubusercontent.com/sellmaai/sprintspend/main/install.sh | bash
 ```
-
-Then run `sprintspends configure` from this repo directory.
 
 ### /sprintspends_status
 
 Run `sprintspends status` to show the local cost summary by project.
+
+### /sprintspends_sync
+
+Run `sprintspends sync` to force sync all unsynced costs to Linear.
 
 ## Development
 

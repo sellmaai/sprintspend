@@ -38,37 +38,20 @@ git add .sprintspends.json && git commit -m "Add SprintSpends config"
 
 ### 2. Each Developer
 
-#### Install
+One command to install (or update) and configure:
 
 ```bash
-git clone https://github.com/sellmaai/sprintspend.git ~/.sprintspends/app
-cd ~/.sprintspends/app && npm install && npm run build && npm link
+curl -fsSL https://raw.githubusercontent.com/sellmaai/sprintspend/main/install.sh | bash
 ```
 
-#### Configure
-
-**Option A** — From Claude Code, type `/configure_linear` and Claude will guide you through setup.
-
-**Option B** — Run directly from any repo that has `.sprintspends.json`:
-
-```bash
-sprintspends configure
-```
+Or from Claude Code, type `/configure_linear`.
 
 This will:
-1. Open your browser to authorize with Linear (OAuth)
-2. Install the Claude Code Stop hook in `~/.claude/settings.json`
+1. Clone/update the SprintSpends CLI
+2. Open your browser to authorize with Linear (OAuth)
+3. Install the Claude Code Stop hook in `~/.claude/settings.json`
 
-That's it. Start using Claude Code normally.
-
-### Updating
-
-```bash
-cd ~/.sprintspends/app && git pull && npm install && npm run build && npm link
-sprintspends configure
-```
-
-`configure` is safe to re-run — it cleans up old hooks and migrates data.
+That's it. Start using Claude Code normally. Safe to re-run — it cleans up old hooks and migrates data.
 
 ## What Happens During a Session
 
@@ -111,12 +94,13 @@ Each dev's sync reads the existing update, preserves other devs' rows, and updat
 
 ## Claude Code Slash Commands
 
-These work inside Claude Code when the repo has a `CLAUDE.md` with SprintSpends instructions:
+Available in any repo with `.sprintspends.json`, or globally after first configure:
 
 | Command | Description |
 |---------|-------------|
-| `/configure_linear` | Set up SprintSpends (install + OAuth + hook) |
+| `/configure_linear` | Install/update + OAuth + hook setup |
 | `/sprintspends_status` | Show local cost summary |
+| `/sprintspends_sync` | Force sync costs to Linear |
 
 ## Local Files
 
