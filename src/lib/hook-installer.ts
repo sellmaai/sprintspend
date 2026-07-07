@@ -97,48 +97,47 @@ export function uninstallHook(): boolean {
   return settings.hooks.Stop?.length !== before;
 }
 
-const RULES_DIR = join(CLAUDE_DIR, "rules");
-const RULES_PATH = join(RULES_DIR, "sprintspends.md");
+const COMMANDS_DIR = join(CLAUDE_DIR, "commands");
 
-const GLOBAL_RULES = `# SprintSpends - AI Cost Tracking
+const COMMANDS: Record<string, string> = {
+  "configure_linear.md": `Set up SprintSpends for this developer. Run this single command to install (or update) and configure:
 
-## Slash Commands
-
-### /configure_linear
-
-Set up SprintSpends for this developer. Run this in the terminal:
 \`\`\`bash
-sprintspends configure
+curl -fsSL https://raw.githubusercontent.com/sellmaai/sprintspend/main/install.sh | bash
 \`\`\`
+`,
+  "sprintspends_status.md": `Show the local AI cost summary by project.
 
-If \`sprintspends\` is not installed, install it first:
-\`\`\`bash
-git clone https://github.com/sellmaai/sprintspend.git ~/.sprintspends/app
-cd ~/.sprintspends/app && npm install && npm run build && npm link
-\`\`\`
-
-Then run \`sprintspends configure\` from a repo that has \`.sprintspends.json\`.
-
-### /sprintspends_status
-
-Show the local AI cost summary by project. Run:
 \`\`\`bash
 sprintspends status
 \`\`\`
+`,
+  "sprintspends_sync.md": `Force sync all unsynced costs to Linear.
 
-### /sprintspends_sync
-
-Force sync all unsynced costs to Linear. Run:
 \`\`\`bash
 sprintspends sync
 \`\`\`
-`;
+`,
+};
+
+// Legacy rules file cleanup
+const RULES_DIR = join(CLAUDE_DIR, "rules");
+const OLD_RULES_PATH = join(RULES_DIR, "sprintspends.md");
 
 export function installGlobalRules(): void {
-  if (!existsSync(RULES_DIR)) {
-    mkdirSync(RULES_DIR, { recursive: true });
+  // Install as proper slash commands
+  if (!existsSync(COMMANDS_DIR)) {
+    mkdirSync(COMMANDS_DIR, { recursive: true });
   }
-  writeFileSync(RULES_PATH, GLOBAL_RULES, "utf-8");
+  for (const [filename, content] of Object.entries(COMMANDS)) {
+    writeFileSync(join(COMMANDS_DIR, filename), content, "utf-8");
+  }
+
+  // Remove legacy rules file if it exists
+  if (existsSync(OLD_RULES_PATH)) {
+    const { unlinkSync } = require("node:fs");
+    unlinkSync(OLD_RULES_PATH);
+  }
 }
 
 export function isInstalled(): boolean {

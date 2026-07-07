@@ -27,5 +27,6 @@ npm run build --silent
 npm link --silent 2>/dev/null || sudo npm link --silent
 
 echo ""
-echo "Installed! Now run:"
-echo "  sprintspends configure"
+echo "Running sprintspends configure..."
+echo ""
+sprintspends configure
